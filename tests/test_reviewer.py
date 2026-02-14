@@ -10,6 +10,8 @@ from coderev.reviewer import (
     Issue,
     Severity,
     Category,
+    BinaryFileError,
+    is_binary_file,
 )
 from coderev.config import Config
 
@@ -249,3 +251,119 @@ class TestJsonParsing:
         
         assert result.summary == "Test"
         assert result.score == 100
+
+
+class TestBinaryFileHandling:
+    """Tests for binary file detection and handling."""
+    
+    def test_is_binary_by_extension_image(self, tmp_path):
+        """Test that common image extensions are detected as binary."""
+        for ext in ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico']:
+            file = tmp_path / f"test{ext}"
+            file.write_bytes(b"fake image data")
+            assert is_binary_file(file) is True
+    
+    def test_is_binary_by_extension_archive(self, tmp_path):
+        """Test that archive extensions are detected as binary."""
+        for ext in ['.zip', '.tar', '.gz', '.7z', '.rar']:
+            file = tmp_path / f"test{ext}"
+            file.write_bytes(b"fake archive data")
+            assert is_binary_file(file) is True
+    
+    def test_is_binary_by_extension_executable(self, tmp_path):
+        """Test that executable extensions are detected as binary."""
+        for ext in ['.exe', '.dll', '.so', '.pyc', '.class']:
+            file = tmp_path / f"test{ext}"
+            file.write_bytes(b"fake binary data")
+            assert is_binary_file(file) is True
+    
+    def test_is_binary_by_null_bytes(self, tmp_path):
+        """Test that files with null bytes are detected as binary."""
+        file = tmp_path / "test.dat"
+        file.write_bytes(b"hello\x00world")
+        assert is_binary_file(file) is True
+    
+    def test_is_binary_by_high_non_text_ratio(self, tmp_path):
+        """Test that files with high non-printable char ratio are binary."""
+        file = tmp_path / "test.unknown"
+        # Create content with >10% non-text bytes
+        content = bytes([0x01, 0x02, 0x03, 0x04, 0x05] + list(b"hello"))
+        file.write_bytes(content)
+        assert is_binary_file(file) is True
+    
+    def test_text_file_not_binary(self, tmp_path):
+        """Test that normal text files are not detected as binary."""
+        file = tmp_path / "test.py"
+        file.write_text("def hello():\n    print('world')\n")
+        assert is_binary_file(file) is False
+    
+    def test_text_file_with_unicode(self, tmp_path):
+        """Test that UTF-8 text files are not detected as binary."""
+        file = tmp_path / "test.md"
+        file.write_text("# Hello World\n\nEmojis: 🎉 🚀 ✨\n", encoding="utf-8")
+        assert is_binary_file(file) is False
+    
+    def test_empty_file_not_binary(self, tmp_path):
+        """Test that empty files are not detected as binary."""
+        file = tmp_path / "empty.txt"
+        file.write_text("")
+        assert is_binary_file(file) is False
+    
+    def test_review_file_rejects_binary(self, tmp_path):
+        """Test that review_file raises BinaryFileError for binary files."""
+        binary_file = tmp_path / "image.png"
+        binary_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        
+        reviewer = CodeReviewer(api_key="test-key")
+        
+        with pytest.raises(BinaryFileError) as exc_info:
+            reviewer.review_file(binary_file)
+        
+        assert "image.png" in str(exc_info.value)
+    
+    def test_review_file_rejects_binary_by_content(self, tmp_path):
+        """Test that files with binary content but text extension are rejected."""
+        sneaky_binary = tmp_path / "sneaky.txt"
+        sneaky_binary.write_bytes(b"looks like text\x00but has null bytes")
+        
+        reviewer = CodeReviewer(api_key="test-key")
+        
+        with pytest.raises(BinaryFileError):
+            reviewer.review_file(sneaky_binary)
+    
+    @patch("coderev.reviewer.anthropic.Anthropic")
+    def test_review_files_skips_binary_gracefully(self, mock_anthropic, tmp_path):
+        """Test that review_files handles binary files without crashing."""
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='{"summary": "OK", "issues": [], "score": 80, "positive": []}')]
+        mock_client.messages.create.return_value = mock_response
+        
+        # Create a text file and a binary file
+        text_file = tmp_path / "code.py"
+        text_file.write_text("print('hello')")
+        
+        binary_file = tmp_path / "image.png"
+        binary_file.write_bytes(b"\x89PNG" + b"\x00" * 100)
+        
+        reviewer = CodeReviewer(api_key="test-key")
+        results = reviewer.review_files([text_file, binary_file])
+        
+        # Text file should be reviewed
+        assert results[str(text_file)].score == 80
+        
+        # Binary file should be skipped with score -1
+        assert results[str(binary_file)].score == -1
+        assert "Skipped" in results[str(binary_file)].summary
+        assert "binary" in results[str(binary_file)].summary.lower()
+    
+    def test_binary_file_error_attributes(self):
+        """Test BinaryFileError exception attributes."""
+        error = BinaryFileError(Path("/path/to/file.bin"))
+        assert error.file_path == Path("/path/to/file.bin")
+        assert "file.bin" in str(error)
+        
+        error_custom = BinaryFileError(Path("test.exe"), "Custom message")
+        assert error_custom.message == "Custom message"

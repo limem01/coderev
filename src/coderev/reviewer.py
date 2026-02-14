@@ -11,8 +11,74 @@ from typing import Any
 
 import anthropic
 
+
+# Binary file detection constants
+BINARY_EXTENSIONS = frozenset({
+    # Images
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg', '.tiff', '.tif',
+    # Audio/Video
+    '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv', '.flac', '.ogg', '.webm',
+    # Archives
+    '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.xz',
+    # Documents
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    # Executables/Libraries
+    '.exe', '.dll', '.so', '.dylib', '.bin', '.o', '.a', '.pyc', '.pyo', '.class',
+    # Fonts
+    '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    # Other binary formats
+    '.sqlite', '.db', '.sqlite3', '.pkl', '.pickle', '.npy', '.npz',
+    '.psd', '.ai', '.sketch', '.fig',
+})
+
+# Number of bytes to sample for binary detection
+BINARY_CHECK_SIZE = 8192
+
+
+def is_binary_file(file_path: Path) -> bool:
+    """
+    Detect if a file is binary.
+    
+    Uses a combination of extension checking and content analysis.
+    Returns True if the file appears to be binary, False otherwise.
+    """
+    # Check extension first (fast path)
+    if file_path.suffix.lower() in BINARY_EXTENSIONS:
+        return True
+    
+    # Check file content for null bytes (binary indicator)
+    try:
+        with open(file_path, 'rb') as f:
+            chunk = f.read(BINARY_CHECK_SIZE)
+            # Null bytes are a strong indicator of binary content
+            if b'\x00' in chunk:
+                return True
+            # Check for high ratio of non-printable characters
+            # Allow common whitespace and printable ASCII
+            non_text_bytes = sum(
+                1 for byte in chunk 
+                if byte < 32 and byte not in (9, 10, 13)  # tab, newline, carriage return
+            )
+            # If more than 10% non-text bytes, likely binary
+            if len(chunk) > 0 and non_text_bytes / len(chunk) > 0.10:
+                return True
+    except (OSError, IOError):
+        # If we can't read the file, let downstream handling deal with it
+        return False
+    
+    return False
+
 from coderev.config import Config
 from coderev.prompts import SYSTEM_PROMPT, build_review_prompt, build_diff_prompt
+
+
+class BinaryFileError(Exception):
+    """Raised when attempting to review a binary file."""
+    
+    def __init__(self, file_path: Path | str, message: str | None = None):
+        self.file_path = Path(file_path)
+        self.message = message or f"Cannot review binary file: {file_path}"
+        super().__init__(self.message)
 
 
 class Severity(str, Enum):
@@ -212,11 +278,29 @@ class CodeReviewer:
         file_path: Path | str,
         focus: list[str] | None = None,
     ) -> ReviewResult:
-        """Review a single file."""
+        """Review a single file.
+        
+        Args:
+            file_path: Path to the file to review.
+            focus: Optional list of focus areas for the review.
+            
+        Returns:
+            ReviewResult containing the review findings.
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist.
+            BinaryFileError: If the file is binary and cannot be reviewed.
+            ValueError: If the file exceeds the maximum size limit.
+            UnicodeDecodeError: If the file cannot be decoded as UTF-8.
+        """
         file_path = Path(file_path)
         
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
+        
+        # Check for binary files before attempting to read
+        if is_binary_file(file_path):
+            raise BinaryFileError(file_path)
         
         if file_path.stat().st_size > self.config.max_file_size:
             raise ValueError(
@@ -224,7 +308,14 @@ class CodeReviewer:
                 f"(max: {self.config.max_file_size})"
             )
         
-        code = file_path.read_text(encoding="utf-8")
+        try:
+            code = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            raise BinaryFileError(
+                file_path, 
+                f"Cannot decode file as UTF-8 (likely binary): {file_path}"
+            ) from e
+        
         language = self._detect_language(file_path) if self.config.language_hints else None
         
         result = self.review_code(code, language, focus, context=str(file_path))
@@ -261,12 +352,21 @@ class CodeReviewer:
         file_paths: list[Path | str],
         focus: list[str] | None = None,
     ) -> dict[str, ReviewResult]:
-        """Review multiple files and return results by file."""
+        """Review multiple files and return results by file.
+        
+        Binary files are automatically skipped with a descriptive message.
+        """
         results = {}
         for path in file_paths:
             path = Path(path)
             try:
                 results[str(path)] = self.review_file(path, focus)
+            except BinaryFileError as e:
+                results[str(path)] = ReviewResult(
+                    summary=f"Skipped: {e.message}",
+                    issues=[],
+                    score=-1,  # Indicates skipped, not reviewed
+                )
             except Exception as e:
                 results[str(path)] = ReviewResult(
                     summary=f"Error reviewing file: {e}",
