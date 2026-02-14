@@ -29,7 +29,7 @@
 - [ ] PyPI publication
 
 ## Bugs to Fix
-- [ ] Handle binary files gracefully
+- [x] Handle binary files gracefully
 - [ ] Better error messages for rate limits
 - [ ] Unicode handling in diffs
 
