@@ -4,7 +4,7 @@
 - [ ] Add async support for parallel file reviews
 - [ ] Implement caching for repeated reviews
 - [ ] Add support for OpenAI models (GPT-4)
-- [ ] Create `.coderev` ignore file support
+- [x] Create `.coderev` ignore file support
 - [ ] Add line-by-line inline suggestions
 
 ## Phase 2: Integrations (Week 2-3)
