@@ -1,7 +1,7 @@
 # CodeRev Development Roadmap
 
 ## Phase 1: Core Improvements (Week 1-2)
-- [ ] Add async support for parallel file reviews
+- [x] Add async support for parallel file reviews
 - [ ] Implement caching for repeated reviews
 - [ ] Add support for OpenAI models (GPT-4)
 - [x] Create `.coderev` ignore file support

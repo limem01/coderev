@@ -84,6 +84,8 @@ def main() -> None:
 @click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob)")
 @click.option("--format", "output_format", type=click.Choice(["rich", "json", "markdown", "sarif"]), default="rich")
 @click.option("--fail-on", type=click.Choice(["critical", "high", "medium", "low"]), help="Exit with error if issues of this severity or higher are found")
+@click.option("--parallel/--no-parallel", default=True, help="Review files in parallel (default: enabled)")
+@click.option("--max-concurrent", "-c", type=int, default=5, help="Max concurrent reviews when using parallel mode")
 def review(
     paths: tuple[str, ...],
     focus: tuple[str, ...],
@@ -91,8 +93,16 @@ def review(
     exclude: tuple[str, ...],
     output_format: str,
     fail_on: Optional[str],
+    parallel: bool,
+    max_concurrent: int,
 ) -> None:
-    """Review code files for issues."""
+    """Review code files for issues.
+    
+    Uses parallel processing by default for faster reviews of multiple files.
+    """
+    import asyncio
+    from coderev.async_reviewer import AsyncCodeReviewer
+    
     try:
         config = Config.load()
         errors = config.validate()
@@ -101,7 +111,6 @@ def review(
                 console.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
         
-        reviewer = CodeReviewer(config=config)
         files = collect_files(paths, recursive, exclude)
         
         if not files:
@@ -110,41 +119,86 @@ def review(
         
         focus_list = list(focus) if focus else None
         
-        if output_format == "rich":
-            formatter = RichFormatter(console)
-            
-            for file_path in files:
-                console.print(f"\n[bold blue]Reviewing {file_path}...[/]")
-                try:
-                    result = reviewer.review_file(file_path, focus=focus_list)
-                    formatter.print_result(result, str(file_path))
-                except Exception as e:
-                    console.print(f"[red]Error reviewing {file_path}: {e}[/]")
-        else:
-            formatter = get_formatter(output_format)
-            results = reviewer.review_files([str(f) for f in files], focus=focus_list)
-            
-            if isinstance(formatter, JsonFormatter):
-                output = formatter.format_multiple(results)
-            else:
-                output = "\n\n".join(
-                    formatter.format(result) for result in results.values()
-                )
-            
-            click.echo(output)
+        # Use parallel processing for multiple files (unless disabled)
+        use_parallel = parallel and len(files) > 1
         
-        # Check fail condition
-        if fail_on:
-            from coderev.reviewer import Severity
-            severity_order = ["low", "medium", "high", "critical"]
-            min_severity_idx = severity_order.index(fail_on)
+        if use_parallel:
+            console.print(f"[dim]Reviewing {len(files)} files in parallel (max {max_concurrent} concurrent)...[/]")
             
-            for file_path in files:
-                result = reviewer.review_file(file_path, focus=focus_list)
-                for issue in result.issues:
-                    issue_idx = severity_order.index(issue.severity.value)
-                    if issue_idx >= min_severity_idx:
-                        sys.exit(1)
+            async def run_parallel_review():
+                async with AsyncCodeReviewer(
+                    config=config,
+                    max_concurrent=max_concurrent,
+                ) as reviewer:
+                    return await reviewer.review_files_async(files, focus=focus_list)
+            
+            results = asyncio.run(run_parallel_review())
+            
+            if output_format == "rich":
+                formatter = RichFormatter(console)
+                for file_path, result in results.items():
+                    console.print(f"\n[bold blue]{file_path}[/]")
+                    formatter.print_result(result, file_path)
+            else:
+                formatter = get_formatter(output_format)
+                if isinstance(formatter, JsonFormatter):
+                    output = formatter.format_multiple(results)
+                else:
+                    output = "\n\n".join(
+                        formatter.format(result) for result in results.values()
+                    )
+                click.echo(output)
+            
+            # Check fail condition
+            if fail_on:
+                from coderev.reviewer import Severity
+                severity_order = ["low", "medium", "high", "critical"]
+                min_severity_idx = severity_order.index(fail_on)
+                
+                for result in results.values():
+                    for issue in result.issues:
+                        issue_idx = severity_order.index(issue.severity.value)
+                        if issue_idx >= min_severity_idx:
+                            sys.exit(1)
+        else:
+            # Sequential processing for single file or when parallel is disabled
+            reviewer = CodeReviewer(config=config)
+            
+            if output_format == "rich":
+                formatter = RichFormatter(console)
+                
+                for file_path in files:
+                    console.print(f"\n[bold blue]Reviewing {file_path}...[/]")
+                    try:
+                        result = reviewer.review_file(file_path, focus=focus_list)
+                        formatter.print_result(result, str(file_path))
+                    except Exception as e:
+                        console.print(f"[red]Error reviewing {file_path}: {e}[/]")
+            else:
+                formatter = get_formatter(output_format)
+                results = reviewer.review_files([str(f) for f in files], focus=focus_list)
+                
+                if isinstance(formatter, JsonFormatter):
+                    output = formatter.format_multiple(results)
+                else:
+                    output = "\n\n".join(
+                        formatter.format(result) for result in results.values()
+                    )
+                
+                click.echo(output)
+            
+            # Check fail condition
+            if fail_on:
+                from coderev.reviewer import Severity
+                severity_order = ["low", "medium", "high", "critical"]
+                min_severity_idx = severity_order.index(fail_on)
+                
+                for file_path in files:
+                    result = reviewer.review_file(file_path, focus=focus_list)
+                    for issue in result.issues:
+                        issue_idx = severity_order.index(issue.severity.value)
+                        if issue_idx >= min_severity_idx:
+                            sys.exit(1)
     
     except RateLimitError as e:
         console.print(f"[red bold]Rate Limit Exceeded[/]")
