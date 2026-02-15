@@ -81,6 +81,48 @@ class BinaryFileError(Exception):
         super().__init__(self.message)
 
 
+class RateLimitError(Exception):
+    """Raised when the API rate limit is exceeded.
+    
+    Provides helpful information about retry timing and suggestions.
+    """
+    
+    def __init__(
+        self,
+        message: str | None = None,
+        retry_after: float | None = None,
+        original_error: Exception | None = None,
+    ):
+        self.retry_after = retry_after
+        self.original_error = original_error
+        
+        if message:
+            self.message = message
+        else:
+            self.message = self._build_message()
+        
+        super().__init__(self.message)
+    
+    def _build_message(self) -> str:
+        """Build a helpful error message with retry guidance."""
+        parts = ["API rate limit exceeded."]
+        
+        if self.retry_after:
+            if self.retry_after < 60:
+                parts.append(f"Retry after: {self.retry_after:.0f} seconds.")
+            else:
+                minutes = self.retry_after / 60
+                parts.append(f"Retry after: {minutes:.1f} minutes.")
+        
+        parts.append("\nSuggestions:")
+        parts.append("  - Wait and retry the request")
+        parts.append("  - Review fewer files at once")
+        parts.append("  - Use --focus to limit review scope")
+        parts.append("  - Check your API plan limits at console.anthropic.com")
+        
+        return "\n".join(parts)
+
+
 class Severity(str, Enum):
     """Issue severity levels."""
     
@@ -194,13 +236,44 @@ class CodeReviewer:
         self.client = anthropic.Anthropic(api_key=self.api_key)
     
     def _call_api(self, prompt: str) -> dict[str, Any]:
-        """Call the Anthropic API and parse JSON response."""
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        """Call the Anthropic API and parse JSON response.
+        
+        Raises:
+            RateLimitError: When the API rate limit is exceeded, with helpful
+                retry guidance and timing information.
+            ValueError: When the API response cannot be parsed as JSON.
+        """
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except anthropic.RateLimitError as e:
+            # Extract retry-after header if available
+            retry_after = None
+            if hasattr(e, 'response') and e.response is not None:
+                retry_header = e.response.headers.get('retry-after')
+                if retry_header:
+                    try:
+                        retry_after = float(retry_header)
+                    except (ValueError, TypeError):
+                        pass
+            
+            raise RateLimitError(
+                retry_after=retry_after,
+                original_error=e,
+            ) from e
+        except anthropic.APIStatusError as e:
+            # Handle other API errors with context
+            if e.status_code == 429:
+                # Sometimes rate limits come as 429 status
+                raise RateLimitError(
+                    message=f"API rate limit exceeded (HTTP 429): {e.message}",
+                    original_error=e,
+                ) from e
+            raise
         
         response_text = message.content[0].text
         

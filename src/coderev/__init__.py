@@ -5,6 +5,7 @@ from coderev.reviewer import (
     ReviewResult,
     Issue,
     BinaryFileError,
+    RateLimitError,
     is_binary_file,
 )
 from coderev.config import Config
@@ -16,6 +17,7 @@ __all__ = [
     "ReviewResult", 
     "Issue",
     "BinaryFileError",
+    "RateLimitError",
     "is_binary_file",
     "Config",
     "CodeRevIgnore",

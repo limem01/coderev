@@ -30,7 +30,7 @@
 
 ## Bugs to Fix
 - [x] Handle binary files gracefully
-- [ ] Better error messages for rate limits
+- [x] Better error messages for rate limits
 - [ ] Unicode handling in diffs
 
 ## Documentation

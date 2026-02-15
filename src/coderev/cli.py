@@ -11,7 +11,7 @@ from rich.console import Console
 
 from coderev import __version__
 from coderev.config import Config
-from coderev.reviewer import CodeReviewer
+from coderev.reviewer import CodeReviewer, RateLimitError
 from coderev.output import RichFormatter, get_formatter, JsonFormatter
 
 
@@ -146,6 +146,10 @@ def review(
                     if issue_idx >= min_severity_idx:
                         sys.exit(1)
     
+    except RateLimitError as e:
+        console.print(f"[red bold]Rate Limit Exceeded[/]")
+        console.print(f"[yellow]{e.message}[/]")
+        sys.exit(2)
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         sys.exit(1)
@@ -200,6 +204,10 @@ def diff(
                 if issue_idx >= min_severity_idx:
                     sys.exit(1)
     
+    except RateLimitError as e:
+        console.print(f"[red bold]Rate Limit Exceeded[/]")
+        console.print(f"[yellow]{e.message}[/]")
+        sys.exit(2)
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         sys.exit(1)
@@ -333,6 +341,10 @@ def pr(
                 )
                 console.print("[green]Review posted successfully![/]")
     
+    except RateLimitError as e:
+        console.print(f"[red bold]Rate Limit Exceeded[/]")
+        console.print(f"[yellow]{e.message}[/]")
+        sys.exit(2)
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         sys.exit(1)

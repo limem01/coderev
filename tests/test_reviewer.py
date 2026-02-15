@@ -11,9 +11,11 @@ from coderev.reviewer import (
     Severity,
     Category,
     BinaryFileError,
+    RateLimitError,
     is_binary_file,
 )
 from coderev.config import Config
+import anthropic
 
 
 class TestSeverity:
@@ -367,3 +369,94 @@ class TestBinaryFileHandling:
         
         error_custom = BinaryFileError(Path("test.exe"), "Custom message")
         assert error_custom.message == "Custom message"
+
+
+class TestRateLimitError:
+    """Tests for RateLimitError exception."""
+    
+    def test_basic_rate_limit_error(self):
+        """Test basic RateLimitError creation."""
+        error = RateLimitError()
+        assert "rate limit exceeded" in error.message.lower()
+        assert "Suggestions" in error.message
+    
+    def test_rate_limit_error_with_retry_seconds(self):
+        """Test RateLimitError with retry_after in seconds."""
+        error = RateLimitError(retry_after=30)
+        assert "30 seconds" in error.message
+        assert error.retry_after == 30
+    
+    def test_rate_limit_error_with_retry_minutes(self):
+        """Test RateLimitError with retry_after in minutes."""
+        error = RateLimitError(retry_after=120)
+        assert "2.0 minutes" in error.message
+    
+    def test_rate_limit_error_suggestions(self):
+        """Test that RateLimitError includes helpful suggestions."""
+        error = RateLimitError()
+        assert "Wait and retry" in error.message
+        assert "Review fewer files" in error.message
+        assert "--focus" in error.message
+        assert "console.anthropic.com" in error.message
+    
+    def test_rate_limit_error_custom_message(self):
+        """Test RateLimitError with custom message."""
+        error = RateLimitError(message="Custom rate limit message")
+        assert error.message == "Custom rate limit message"
+    
+    def test_rate_limit_error_preserves_original(self):
+        """Test that original error is preserved."""
+        original = ValueError("original error")
+        error = RateLimitError(original_error=original)
+        assert error.original_error is original
+    
+    @patch("coderev.reviewer.anthropic.Anthropic")
+    def test_call_api_catches_rate_limit(self, mock_anthropic):
+        """Test that _call_api properly catches Anthropic rate limit errors."""
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        
+        # Simulate rate limit error
+        mock_response = MagicMock()
+        mock_response.headers = {"retry-after": "60"}
+        rate_limit_error = anthropic.RateLimitError(
+            message="Rate limit exceeded",
+            response=mock_response,
+            body=None,
+        )
+        mock_client.messages.create.side_effect = rate_limit_error
+        
+        reviewer = CodeReviewer(api_key="test-key")
+        
+        with pytest.raises(RateLimitError) as exc_info:
+            reviewer.review_code("def test(): pass")
+        
+        error = exc_info.value
+        assert error.retry_after == 60
+        assert error.original_error is rate_limit_error
+    
+    @patch("coderev.reviewer.anthropic.Anthropic")
+    def test_call_api_catches_429_status(self, mock_anthropic):
+        """Test that _call_api catches 429 API status errors as rate limits."""
+        mock_client = MagicMock()
+        mock_anthropic.return_value = mock_client
+        
+        # Simulate 429 status error
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        status_error = anthropic.APIStatusError(
+            message="Too many requests",
+            response=mock_response,
+            body=None,
+        )
+        status_error.status_code = 429
+        mock_client.messages.create.side_effect = status_error
+        
+        reviewer = CodeReviewer(api_key="test-key")
+        
+        with pytest.raises(RateLimitError) as exc_info:
+            reviewer.review_code("def test(): pass")
+        
+        error = exc_info.value
+        assert "429" in error.message
+        assert error.original_error is status_error
