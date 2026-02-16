@@ -1,5 +1,6 @@
 """CodeRev - AI-powered code review CLI tool."""
 
+from coderev.cache import ReviewCache
 from coderev.reviewer import (
     CodeReviewer,
     ReviewResult,
@@ -12,7 +13,7 @@ from coderev.async_reviewer import AsyncCodeReviewer, review_files_parallel
 from coderev.config import Config
 from coderev.ignore import CodeRevIgnore
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 __all__ = [
     "CodeReviewer",
     "AsyncCodeReviewer",
@@ -24,4 +25,5 @@ __all__ = [
     "is_binary_file",
     "Config",
     "CodeRevIgnore",
+    "ReviewCache",
 ]

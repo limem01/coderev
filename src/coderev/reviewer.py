@@ -68,6 +68,7 @@ def is_binary_file(file_path: Path) -> bool:
     
     return False
 
+from coderev.cache import ReviewCache
 from coderev.config import Config
 from coderev.prompts import SYSTEM_PROMPT, build_review_prompt, build_diff_prompt
 
@@ -222,6 +223,9 @@ class CodeReviewer:
         api_key: str | None = None,
         model: str | None = None,
         config: Config | None = None,
+        cache_enabled: bool = True,
+        cache_ttl_hours: int | None = None,
+        cache_dir: Path | str | None = None,
     ):
         self.config = config or Config.load()
         self.api_key = api_key or self.config.api_key
@@ -234,6 +238,13 @@ class CodeReviewer:
             )
         
         self.client = anthropic.Anthropic(api_key=self.api_key)
+        
+        # Initialize cache
+        self.cache = ReviewCache(
+            cache_dir=cache_dir,
+            ttl_hours=cache_ttl_hours or 168,  # 1 week default
+            enabled=cache_enabled,
+        )
     
     def _call_api(self, prompt: str) -> dict[str, Any]:
         """Call the Anthropic API and parse JSON response.
@@ -329,12 +340,42 @@ class CodeReviewer:
         language: str | None = None,
         focus: list[str] | None = None,
         context: str | None = None,
+        use_cache: bool = True,
     ) -> ReviewResult:
-        """Review a code snippet."""
-        focus = focus or self.config.focus
-        prompt = build_review_prompt(code, language, focus, context)
+        """Review a code snippet.
         
+        Args:
+            code: The code to review.
+            language: Programming language (optional, for better analysis).
+            focus: List of focus areas (e.g., ['security', 'performance']).
+            context: Additional context (e.g., file path).
+            use_cache: Whether to use cached results if available.
+            
+        Returns:
+            ReviewResult containing the review findings.
+        """
+        focus = focus or self.config.focus
+        
+        # Check cache first
+        if use_cache:
+            cached = self.cache.get(code, self.model, focus, language)
+            if cached is not None:
+                # Reconstruct ReviewResult from cached data
+                issues = [Issue.from_dict(i) for i in cached.get("issues", [])]
+                return ReviewResult(
+                    summary=cached.get("summary", "Review completed (cached)"),
+                    issues=issues,
+                    score=cached.get("score", 0),
+                    positive=cached.get("positive", []),
+                    raw_response=cached,
+                )
+        
+        prompt = build_review_prompt(code, language, focus, context)
         response = self._call_api(prompt)
+        
+        # Cache the result
+        if use_cache:
+            self.cache.set(code, self.model, response, focus, language)
         
         issues = [Issue.from_dict(i) for i in response.get("issues", [])]
         
@@ -350,12 +391,14 @@ class CodeReviewer:
         self,
         file_path: Path | str,
         focus: list[str] | None = None,
+        use_cache: bool = True,
     ) -> ReviewResult:
         """Review a single file.
         
         Args:
             file_path: Path to the file to review.
             focus: Optional list of focus areas for the review.
+            use_cache: Whether to use cached results if available.
             
         Returns:
             ReviewResult containing the review findings.
@@ -391,7 +434,7 @@ class CodeReviewer:
         
         language = self._detect_language(file_path) if self.config.language_hints else None
         
-        result = self.review_code(code, language, focus, context=str(file_path))
+        result = self.review_code(code, language, focus, context=str(file_path), use_cache=use_cache)
         
         # Set file path on all issues
         for issue in result.issues:
@@ -403,12 +446,39 @@ class CodeReviewer:
         self,
         diff: str,
         focus: list[str] | None = None,
+        use_cache: bool = True,
     ) -> ReviewResult:
-        """Review a git diff."""
-        focus = focus or self.config.focus
-        prompt = build_diff_prompt(diff, focus)
+        """Review a git diff.
         
+        Args:
+            diff: The git diff string to review.
+            focus: List of focus areas (e.g., ['security', 'performance']).
+            use_cache: Whether to use cached results if available.
+            
+        Returns:
+            ReviewResult containing the review findings.
+        """
+        focus = focus or self.config.focus
+        
+        # Check cache first (use 'diff' as language marker for cache key distinction)
+        if use_cache:
+            cached = self.cache.get(diff, self.model, focus, language="diff")
+            if cached is not None:
+                issues = [Issue.from_dict(i) for i in cached.get("issues", [])]
+                return ReviewResult(
+                    summary=cached.get("summary", "Diff review completed (cached)"),
+                    issues=issues,
+                    score=cached.get("score", 0),
+                    positive=cached.get("positive", []),
+                    raw_response=cached,
+                )
+        
+        prompt = build_diff_prompt(diff, focus)
         response = self._call_api(prompt)
+        
+        # Cache the result
+        if use_cache:
+            self.cache.set(diff, self.model, response, focus, language="diff")
         
         issues = [Issue.from_dict(i) for i in response.get("issues", [])]
         
@@ -424,16 +494,25 @@ class CodeReviewer:
         self,
         file_paths: list[Path | str],
         focus: list[str] | None = None,
+        use_cache: bool = True,
     ) -> dict[str, ReviewResult]:
         """Review multiple files and return results by file.
         
         Binary files are automatically skipped with a descriptive message.
+        
+        Args:
+            file_paths: List of file paths to review.
+            focus: List of focus areas for the review.
+            use_cache: Whether to use cached results if available.
+            
+        Returns:
+            Dictionary mapping file paths to their review results.
         """
         results = {}
         for path in file_paths:
             path = Path(path)
             try:
-                results[str(path)] = self.review_file(path, focus)
+                results[str(path)] = self.review_file(path, focus, use_cache=use_cache)
             except BinaryFileError as e:
                 results[str(path)] = ReviewResult(
                     summary=f"Skipped: {e.message}",
@@ -447,3 +526,27 @@ class CodeReviewer:
                     score=0,
                 )
         return results
+    
+    def clear_cache(self) -> int:
+        """Clear all cached review results.
+        
+        Returns:
+            Number of cache entries cleared.
+        """
+        return self.cache.clear()
+    
+    def cache_stats(self) -> dict[str, Any]:
+        """Get cache statistics.
+        
+        Returns:
+            Dictionary with cache stats (total_entries, size, expired, etc.).
+        """
+        return self.cache.stats()
+    
+    def prune_cache(self) -> int:
+        """Remove expired cache entries.
+        
+        Returns:
+            Number of entries pruned.
+        """
+        return self.cache.prune_expired()
