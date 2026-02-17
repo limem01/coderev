@@ -31,38 +31,80 @@ BINARY_EXTENSIONS = frozenset({
 BINARY_CHECK_SIZE = 8192
 
 
+def _has_excessive_control_chars(chunk: bytes) -> bool:
+    """Check if a byte chunk has too many control characters.
+    
+    Control characters (bytes 0-31 except tab, newline, carriage return, form feed)
+    are rarely found in text files. A high ratio indicates binary content.
+    """
+    if len(chunk) == 0:
+        return False
+    
+    # Count control characters, excluding common whitespace
+    # tab (9), newline (10), form feed (12), carriage return (13)
+    non_text_bytes = sum(
+        1 for byte in chunk 
+        if byte < 32 and byte not in (9, 10, 12, 13)
+    )
+    
+    # If more than 10% control chars, likely binary
+    return non_text_bytes / len(chunk) > 0.10
+
+
 def is_binary_file(file_path: Path) -> bool:
     """
     Detect if a file is binary.
     
     Uses a combination of extension checking and content analysis.
+    Properly handles UTF-8 encoded text files with unicode characters.
     Returns True if the file appears to be binary, False otherwise.
     """
     # Check extension first (fast path)
     if file_path.suffix.lower() in BINARY_EXTENSIONS:
         return True
     
-    # Check file content for null bytes (binary indicator)
+    # Check file content
     try:
         with open(file_path, 'rb') as f:
             chunk = f.read(BINARY_CHECK_SIZE)
+            
+            # Empty files are not binary
+            if len(chunk) == 0:
+                return False
+            
             # Null bytes are a strong indicator of binary content
             if b'\x00' in chunk:
                 return True
-            # Check for high ratio of non-printable characters
-            # Allow common whitespace and printable ASCII
-            non_text_bytes = sum(
-                1 for byte in chunk 
-                if byte < 32 and byte not in (9, 10, 13)  # tab, newline, carriage return
-            )
-            # If more than 10% non-text bytes, likely binary
-            if len(chunk) > 0 and non_text_bytes / len(chunk) > 0.10:
+            
+            # Check for excessive control characters first
+            # This catches files that might decode but are still binary
+            if _has_excessive_control_chars(chunk):
                 return True
+            
+            # Try to decode as UTF-8 - this is the most reliable check
+            # for distinguishing text from binary
+            try:
+                chunk.decode('utf-8')
+                # Successfully decoded as UTF-8 without excessive control chars
+                return False
+            except UnicodeDecodeError:
+                pass
+            
+            # Try other common text encodings
+            for encoding in ('latin-1', 'cp1252', 'iso-8859-1'):
+                try:
+                    chunk.decode(encoding)
+                    # Already checked control chars above, so this is text
+                    return False
+                except UnicodeDecodeError:
+                    pass
+            
+            # Could not decode as any text encoding, treat as binary
+            return True
+            
     except (OSError, IOError):
         # If we can't read the file, let downstream handling deal with it
         return False
-    
-    return False
 
 from coderev.cache import ReviewCache
 from coderev.config import Config

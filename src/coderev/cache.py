@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -84,12 +85,20 @@ class ReviewCache:
         
         The key is a SHA-256 hash of the combined parameters, ensuring that
         any change to content, model, focus, or language produces a different key.
+        
+        Unicode content is normalized to NFC form before hashing to ensure
+        consistent cache keys regardless of unicode representation.
         """
+        # Normalize unicode content to NFC form for consistent hashing
+        # This handles cases where the same character can be represented
+        # differently (e.g., é as single codepoint vs e + combining accent)
+        normalized_content = unicodedata.normalize('NFC', content)
+        
         # Sort focus areas for consistent hashing
         focus_str = ",".join(sorted(focus or []))
         
         # Combine all parameters
-        key_content = f"{content}|{model}|{focus_str}|{language or ''}"
+        key_content = f"{normalized_content}|{model}|{focus_str}|{language or ''}"
         
         # Generate SHA-256 hash
         return hashlib.sha256(key_content.encode("utf-8")).hexdigest()

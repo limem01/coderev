@@ -2,6 +2,40 @@
 
 from __future__ import annotations
 
+import unicodedata
+
+
+def normalize_unicode(text: str) -> str:
+    """Normalize unicode text to NFC form.
+    
+    This ensures consistent handling of unicode characters in diffs,
+    where the same character might be represented differently
+    (e.g., composed vs decomposed forms).
+    
+    Also replaces common problematic unicode characters with their
+    ASCII equivalents where appropriate for code review contexts.
+    """
+    # Normalize to NFC (Canonical Decomposition, followed by Canonical Composition)
+    normalized = unicodedata.normalize('NFC', text)
+    
+    # Replace various unicode quote characters with ASCII equivalents
+    # This helps with diffs that may have different quote styles
+    quote_replacements = {
+        '\u2018': "'",  # left single quotation mark
+        '\u2019': "'",  # right single quotation mark
+        '\u201c': '"',  # left double quotation mark
+        '\u201d': '"',  # right double quotation mark
+        '\u2032': "'",  # prime
+        '\u2033': '"',  # double prime
+        '\u00ab': '"',  # left-pointing double angle quotation mark
+        '\u00bb': '"',  # right-pointing double angle quotation mark
+    }
+    
+    for unicode_char, ascii_char in quote_replacements.items():
+        normalized = normalized.replace(unicode_char, ascii_char)
+    
+    return normalized
+
 
 SYSTEM_PROMPT = """You are an expert code reviewer with deep knowledge of software engineering best practices, security vulnerabilities, performance optimization, and clean code principles.
 
@@ -67,7 +101,10 @@ def build_diff_prompt(
     diff: str,
     focus: list[str] | None = None,
 ) -> str:
-    """Build the review prompt for a git diff."""
+    """Build the review prompt for a git diff.
+    
+    Unicode content in the diff is normalized for consistent handling.
+    """
     parts = []
     
     parts.append("Review the following git diff and identify issues with the changes:\n")
@@ -75,7 +112,9 @@ def build_diff_prompt(
     if focus:
         parts.append(f"Focus areas: {', '.join(focus)}\n")
     
-    parts.append(f"\n```diff\n{diff}\n```\n")
+    # Normalize unicode in diff content
+    normalized_diff = normalize_unicode(diff)
+    parts.append(f"\n```diff\n{normalized_diff}\n```\n")
     
     parts.append("""
 Focus only on the changed lines (+ lines). Consider the context but only flag issues in new/modified code.

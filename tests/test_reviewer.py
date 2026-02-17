@@ -288,7 +288,7 @@ class TestBinaryFileHandling:
     def test_is_binary_by_high_non_text_ratio(self, tmp_path):
         """Test that files with high non-printable char ratio are binary."""
         file = tmp_path / "test.unknown"
-        # Create content with >10% non-text bytes
+        # Create content with >10% non-text bytes (control characters)
         content = bytes([0x01, 0x02, 0x03, 0x04, 0x05] + list(b"hello"))
         file.write_bytes(content)
         assert is_binary_file(file) is True
@@ -333,15 +333,18 @@ class TestBinaryFileHandling:
         with pytest.raises(BinaryFileError):
             reviewer.review_file(sneaky_binary)
     
-    @patch("coderev.reviewer.anthropic.Anthropic")
-    def test_review_files_skips_binary_gracefully(self, mock_anthropic, tmp_path):
+    @patch("coderev.reviewer.get_provider")
+    def test_review_files_skips_binary_gracefully(self, mock_get_provider, tmp_path):
         """Test that review_files handles binary files without crashing."""
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
+        mock_provider = MagicMock()
+        mock_get_provider.return_value = mock_provider
         
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"summary": "OK", "issues": [], "score": 80, "positive": []}')]
-        mock_client.messages.create.return_value = mock_response
+        mock_response.content = '{"summary": "OK", "issues": [], "score": 80, "positive": []}'
+        mock_provider.call.return_value = mock_response
+        mock_provider.parse_json_response.return_value = {
+            "summary": "OK", "issues": [], "score": 80, "positive": []
+        }
         
         # Create a text file and a binary file
         text_file = tmp_path / "code.py"

@@ -31,7 +31,7 @@
 ## Bugs to Fix
 - [x] Handle binary files gracefully
 - [x] Better error messages for rate limits
-- [ ] Unicode handling in diffs
+- [x] Unicode handling in diffs
 
 ## Documentation
 - [ ] Add GIF demos to README
