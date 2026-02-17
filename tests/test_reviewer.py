@@ -393,7 +393,7 @@ class TestRateLimitError:
     
     def test_rate_limit_error_suggestions(self):
         """Test that RateLimitError includes helpful suggestions."""
-        error = RateLimitError()
+        error = RateLimitError(provider="anthropic")
         assert "Wait and retry" in error.message
         assert "Review fewer files" in error.message
         assert "--focus" in error.message

@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
-
-import anthropic
 
 
 # Binary file detection constants
@@ -71,6 +67,12 @@ def is_binary_file(file_path: Path) -> bool:
 from coderev.cache import ReviewCache
 from coderev.config import Config
 from coderev.prompts import SYSTEM_PROMPT, build_review_prompt, build_diff_prompt
+from coderev.providers import (
+    BaseProvider,
+    RateLimitError,
+    ProviderError,
+    get_provider,
+)
 
 
 class BinaryFileError(Exception):
@@ -80,48 +82,6 @@ class BinaryFileError(Exception):
         self.file_path = Path(file_path)
         self.message = message or f"Cannot review binary file: {file_path}"
         super().__init__(self.message)
-
-
-class RateLimitError(Exception):
-    """Raised when the API rate limit is exceeded.
-    
-    Provides helpful information about retry timing and suggestions.
-    """
-    
-    def __init__(
-        self,
-        message: str | None = None,
-        retry_after: float | None = None,
-        original_error: Exception | None = None,
-    ):
-        self.retry_after = retry_after
-        self.original_error = original_error
-        
-        if message:
-            self.message = message
-        else:
-            self.message = self._build_message()
-        
-        super().__init__(self.message)
-    
-    def _build_message(self) -> str:
-        """Build a helpful error message with retry guidance."""
-        parts = ["API rate limit exceeded."]
-        
-        if self.retry_after:
-            if self.retry_after < 60:
-                parts.append(f"Retry after: {self.retry_after:.0f} seconds.")
-            else:
-                minutes = self.retry_after / 60
-                parts.append(f"Retry after: {minutes:.1f} minutes.")
-        
-        parts.append("\nSuggestions:")
-        parts.append("  - Wait and retry the request")
-        parts.append("  - Review fewer files at once")
-        parts.append("  - Use --focus to limit review scope")
-        parts.append("  - Check your API plan limits at console.anthropic.com")
-        
-        return "\n".join(parts)
 
 
 class Severity(str, Enum):
@@ -216,7 +176,21 @@ class ReviewResult:
 
 
 class CodeReviewer:
-    """Main code reviewer class."""
+    """Main code reviewer class.
+    
+    Supports multiple LLM providers (Anthropic Claude, OpenAI GPT).
+    The provider is auto-detected from the model name, or can be explicitly set.
+    
+    Examples:
+        # Use Claude (default)
+        reviewer = CodeReviewer()
+        
+        # Use GPT-4
+        reviewer = CodeReviewer(model="gpt-4o", api_key="sk-...")
+        
+        # Explicit provider
+        reviewer = CodeReviewer(model="gpt-4o", provider="openai")
+    """
     
     def __init__(
         self,
@@ -226,18 +200,53 @@ class CodeReviewer:
         cache_enabled: bool = True,
         cache_ttl_hours: int | None = None,
         cache_dir: Path | str | None = None,
+        provider: str | None = None,
     ):
+        """Initialize the code reviewer.
+        
+        Args:
+            api_key: API key for the provider. If not provided, uses config/env vars.
+            model: Model name to use. Defaults to config or claude-3-sonnet.
+            config: Optional Config object. If not provided, loads from file/env.
+            cache_enabled: Whether to enable result caching.
+            cache_ttl_hours: Cache TTL in hours. Defaults to 168 (1 week).
+            cache_dir: Directory for cache storage.
+            provider: LLM provider ('anthropic' or 'openai'). Auto-detected if not specified.
+        """
         self.config = config or Config.load()
-        self.api_key = api_key or self.config.api_key
         self.model = model or self.config.model
         
-        if not self.api_key:
-            raise ValueError(
-                "API key required. Set CODEREV_API_KEY environment variable "
-                "or pass api_key parameter."
-            )
+        # Determine provider
+        self.provider_name = provider or self.config.get_provider()
+        if model:
+            # If model is explicitly provided, detect provider from it
+            from coderev.config import detect_provider
+            self.provider_name = provider or detect_provider(model)
         
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+        # Get API key for the determined provider
+        if api_key:
+            self.api_key = api_key
+        else:
+            self.api_key = self.config.get_api_key_for_provider(self.provider_name)
+        
+        if not self.api_key:
+            if self.provider_name == "openai":
+                raise ValueError(
+                    "OpenAI API key required. Set OPENAI_API_KEY environment variable "
+                    "or pass api_key parameter."
+                )
+            else:
+                raise ValueError(
+                    "API key required. Set CODEREV_API_KEY environment variable "
+                    "or pass api_key parameter."
+                )
+        
+        # Initialize the provider
+        self._provider: BaseProvider = get_provider(
+            provider_name=self.provider_name,
+            api_key=self.api_key,
+            model=self.model,
+        )
         
         # Initialize cache
         self.cache = ReviewCache(
@@ -247,63 +256,17 @@ class CodeReviewer:
         )
     
     def _call_api(self, prompt: str) -> dict[str, Any]:
-        """Call the Anthropic API and parse JSON response.
+        """Call the LLM API and parse JSON response.
+        
+        Uses the configured provider (Anthropic or OpenAI).
         
         Raises:
             RateLimitError: When the API rate limit is exceeded, with helpful
                 retry guidance and timing information.
             ValueError: When the API response cannot be parsed as JSON.
         """
-        try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        except anthropic.RateLimitError as e:
-            # Extract retry-after header if available
-            retry_after = None
-            if hasattr(e, 'response') and e.response is not None:
-                retry_header = e.response.headers.get('retry-after')
-                if retry_header:
-                    try:
-                        retry_after = float(retry_header)
-                    except (ValueError, TypeError):
-                        pass
-            
-            raise RateLimitError(
-                retry_after=retry_after,
-                original_error=e,
-            ) from e
-        except anthropic.APIStatusError as e:
-            # Handle other API errors with context
-            if e.status_code == 429:
-                # Sometimes rate limits come as 429 status
-                raise RateLimitError(
-                    message=f"API rate limit exceeded (HTTP 429): {e.message}",
-                    original_error=e,
-                ) from e
-            raise
-        
-        response_text = message.content[0].text
-        
-        # Extract JSON from response (handle markdown code blocks)
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
-        if json_match:
-            response_text = json_match.group(1)
-        
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError as e:
-            # Try to salvage partial JSON
-            response_text = response_text.strip()
-            if not response_text.endswith("}"):
-                response_text += "}"
-            try:
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                raise ValueError(f"Failed to parse API response as JSON: {e}")
+        response = self._provider.call(SYSTEM_PROMPT, prompt)
+        return self._provider.parse_json_response(response.content)
     
     def _detect_language(self, file_path: Path) -> str | None:
         """Detect programming language from file extension."""

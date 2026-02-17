@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
-from coderev.config import Config
+from coderev.config import Config, detect_provider
 from coderev.prompts import SYSTEM_PROMPT, build_review_prompt, build_diff_prompt
+from coderev.providers import (
+    BaseProvider,
+    RateLimitError,
+    get_provider,
+)
 from coderev.reviewer import (
     BinaryFileError,
     Issue,
-    RateLimitError,
     ReviewResult,
     is_binary_file,
 )
@@ -27,9 +27,17 @@ class AsyncCodeReviewer:
     Uses asyncio to review multiple files concurrently, significantly
     reducing total review time for large codebases.
     
+    Supports multiple LLM providers (Anthropic Claude, OpenAI GPT).
+    The provider is auto-detected from the model name.
+    
     Example:
         async def main():
+            # Use Claude (default)
             reviewer = AsyncCodeReviewer(api_key="your-key")
+            
+            # Use GPT-4
+            reviewer = AsyncCodeReviewer(model="gpt-4o", api_key="sk-...")
+            
             files = [Path("a.py"), Path("b.py"), Path("c.py")]
             results = await reviewer.review_files_async(files)
             for path, result in results.items():
@@ -42,35 +50,53 @@ class AsyncCodeReviewer:
         model: str | None = None,
         config: Config | None = None,
         max_concurrent: int = 5,
+        provider: str | None = None,
     ):
         """Initialize async reviewer.
         
         Args:
-            api_key: Anthropic API key.
+            api_key: API key for the provider.
             model: Model to use for reviews.
             config: Configuration object.
             max_concurrent: Maximum concurrent API calls (default 5).
+            provider: LLM provider ('anthropic' or 'openai'). Auto-detected if not specified.
         """
         self.config = config or Config.load()
-        self.api_key = api_key or self.config.api_key
         self.model = model or self.config.model
         self.max_concurrent = max_concurrent
         
-        if not self.api_key:
-            raise ValueError(
-                "API key required. Set CODEREV_API_KEY environment variable "
-                "or pass api_key parameter."
-            )
+        # Determine provider
+        self.provider_name = provider or self.config.get_provider()
+        if model:
+            # If model is explicitly provided, detect provider from it
+            self.provider_name = provider or detect_provider(model)
         
-        self._client: anthropic.AsyncAnthropic | None = None
+        # Get API key for the determined provider
+        if api_key:
+            self.api_key = api_key
+        else:
+            self.api_key = self.config.get_api_key_for_provider(self.provider_name)
+        
+        if not self.api_key:
+            if self.provider_name == "openai":
+                raise ValueError(
+                    "OpenAI API key required. Set OPENAI_API_KEY environment variable "
+                    "or pass api_key parameter."
+                )
+            else:
+                raise ValueError(
+                    "API key required. Set CODEREV_API_KEY environment variable "
+                    "or pass api_key parameter."
+                )
+        
+        # Initialize the provider
+        self._provider: BaseProvider = get_provider(
+            provider_name=self.provider_name,
+            api_key=self.api_key,
+            model=self.model,
+        )
+        
         self._semaphore: asyncio.Semaphore | None = None
-    
-    @property
-    def client(self) -> anthropic.AsyncAnthropic:
-        """Lazy-initialize async client."""
-        if self._client is None:
-            self._client = anthropic.AsyncAnthropic(api_key=self.api_key)
-        return self._client
     
     @property
     def semaphore(self) -> asyncio.Semaphore:
@@ -80,10 +106,8 @@ class AsyncCodeReviewer:
         return self._semaphore
     
     async def close(self) -> None:
-        """Close the async client."""
-        if self._client is not None:
-            await self._client.close()
-            self._client = None
+        """Close the async client (no-op for provider abstraction)."""
+        pass
     
     async def __aenter__(self) -> "AsyncCodeReviewer":
         return self
@@ -92,57 +116,13 @@ class AsyncCodeReviewer:
         await self.close()
     
     async def _call_api(self, prompt: str) -> dict[str, Any]:
-        """Call the Anthropic API asynchronously.
+        """Call the LLM API asynchronously.
         
         Uses a semaphore to limit concurrent requests and avoid rate limits.
         """
         async with self.semaphore:
-            try:
-                message = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=4096,
-                    system=SYSTEM_PROMPT,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-            except anthropic.RateLimitError as e:
-                retry_after = None
-                if hasattr(e, 'response') and e.response is not None:
-                    retry_header = e.response.headers.get('retry-after')
-                    if retry_header:
-                        try:
-                            retry_after = float(retry_header)
-                        except (ValueError, TypeError):
-                            pass
-                
-                raise RateLimitError(
-                    retry_after=retry_after,
-                    original_error=e,
-                ) from e
-            except anthropic.APIStatusError as e:
-                if e.status_code == 429:
-                    raise RateLimitError(
-                        message=f"API rate limit exceeded (HTTP 429): {e.message}",
-                        original_error=e,
-                    ) from e
-                raise
-        
-        response_text = message.content[0].text
-        
-        # Extract JSON from response
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response_text)
-        if json_match:
-            response_text = json_match.group(1)
-        
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError as e:
-            response_text = response_text.strip()
-            if not response_text.endswith("}"):
-                response_text += "}"
-            try:
-                return json.loads(response_text)
-            except json.JSONDecodeError:
-                raise ValueError(f"Failed to parse API response as JSON: {e}")
+            response = await self._provider.call_async(SYSTEM_PROMPT, prompt)
+            return self._provider.parse_json_response(response.content)
     
     def _detect_language(self, file_path: Path) -> str | None:
         """Detect programming language from file extension."""
@@ -319,25 +299,37 @@ class AsyncCodeReviewer:
 async def review_files_parallel(
     file_paths: list[Path | str],
     api_key: str | None = None,
+    model: str | None = None,
     focus: list[str] | None = None,
     max_concurrent: int = 5,
     config: Config | None = None,
+    provider: str | None = None,
 ) -> dict[str, ReviewResult]:
     """Convenience function to review files in parallel.
+    
+    Supports multiple providers (Anthropic, OpenAI).
     
     Example:
         import asyncio
         from coderev.async_reviewer import review_files_parallel
         
+        # Use Claude (default)
         results = asyncio.run(review_files_parallel([
             "src/main.py",
             "src/utils.py",
-            "src/config.py",
         ]))
+        
+        # Use GPT-4
+        results = asyncio.run(review_files_parallel(
+            ["src/main.py"],
+            model="gpt-4o",
+        ))
     """
     async with AsyncCodeReviewer(
         api_key=api_key,
+        model=model,
         config=config,
         max_concurrent=max_concurrent,
+        provider=provider,
     ) as reviewer:
         return await reviewer.review_files_async(file_paths, focus)

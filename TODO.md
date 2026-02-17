@@ -3,7 +3,7 @@
 ## Phase 1: Core Improvements (Week 1-2)
 - [x] Add async support for parallel file reviews
 - [x] Implement caching for repeated reviews
-- [ ] Add support for OpenAI models (GPT-4)
+- [x] Add support for OpenAI models (GPT-4)
 - [x] Create `.coderev` ignore file support
 - [ ] Add line-by-line inline suggestions
 
