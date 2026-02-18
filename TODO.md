@@ -19,7 +19,7 @@
 - [ ] Team configuration sharing
 - [ ] Review history and tracking
 - [ ] Diff viewer with annotations
-- [ ] Cost estimation before review
+- [x] Cost estimation before review
 
 ## Phase 4: Polish (Week 4-5)
 - [ ] Interactive TUI mode
