@@ -77,6 +77,28 @@ def main() -> None:
     pass
 
 
+def print_cost_estimate(estimate: "CostEstimate", console: Console) -> None:
+    """Print a formatted cost estimate to the console."""
+    from rich.table import Table
+    from rich.panel import Panel
+    
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("Label", style="dim")
+    table.add_column("Value", style="bold")
+    
+    table.add_row("Model", estimate.model)
+    table.add_row("Files", f"{estimate.file_count}" + (f" ({estimate.skipped_files} skipped)" if estimate.skipped_files else ""))
+    table.add_row("Input tokens", f"{estimate.input_tokens:,}")
+    table.add_row("Est. output tokens", f"{estimate.estimated_output_tokens:,}")
+    table.add_row("Input cost", f"${estimate.input_cost_usd:.4f}")
+    table.add_row("Output cost", f"${estimate.output_cost_usd:.4f}")
+    table.add_row("", "")
+    table.add_row("Total estimated cost", f"[green bold]{estimate.format_cost()}[/]")
+    
+    panel = Panel(table, title="[bold blue]Cost Estimate[/]", border_style="blue")
+    console.print(panel)
+
+
 @main.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
@@ -86,6 +108,7 @@ def main() -> None:
 @click.option("--fail-on", type=click.Choice(["critical", "high", "medium", "low"]), help="Exit with error if issues of this severity or higher are found")
 @click.option("--parallel/--no-parallel", default=True, help="Review files in parallel (default: enabled)")
 @click.option("--max-concurrent", "-c", type=int, default=5, help="Max concurrent reviews when using parallel mode")
+@click.option("--estimate", is_flag=True, help="Show cost estimate without running the review")
 def review(
     paths: tuple[str, ...],
     focus: tuple[str, ...],
@@ -95,13 +118,16 @@ def review(
     fail_on: Optional[str],
     parallel: bool,
     max_concurrent: int,
+    estimate: bool,
 ) -> None:
     """Review code files for issues.
     
     Uses parallel processing by default for faster reviews of multiple files.
+    Use --estimate to see the expected cost before running.
     """
     import asyncio
     from coderev.async_reviewer import AsyncCodeReviewer
+    from coderev.cost import CostEstimator, CostEstimate
     
     try:
         config = Config.load()
@@ -118,6 +144,13 @@ def review(
             return
         
         focus_list = list(focus) if focus else None
+        
+        # Handle cost estimation
+        if estimate:
+            estimator = CostEstimator(model=config.model)
+            cost_estimate = estimator.estimate_files(files, focus=focus_list)
+            print_cost_estimate(cost_estimate, console)
+            return
         
         # Use parallel processing for multiple files (unless disabled)
         use_parallel = parallel and len(files) > 1
@@ -215,14 +248,21 @@ def review(
 @click.option("--focus", "-f", multiple=True, help="Focus areas")
 @click.option("--format", "output_format", type=click.Choice(["rich", "json", "markdown", "sarif"]), default="rich")
 @click.option("--fail-on", type=click.Choice(["critical", "high", "medium", "low"]))
+@click.option("--estimate", is_flag=True, help="Show cost estimate without running the review")
 def diff(
     ref: Optional[str],
     staged: bool,
     focus: tuple[str, ...],
     output_format: str,
     fail_on: Optional[str],
+    estimate: bool,
 ) -> None:
-    """Review git diff changes."""
+    """Review git diff changes.
+    
+    Use --estimate to see the expected cost before running.
+    """
+    from coderev.cost import CostEstimator
+    
     try:
         config = Config.load()
         errors = config.validate()
@@ -237,8 +277,16 @@ def diff(
             console.print("[yellow]No changes to review[/]")
             return
         
-        reviewer = CodeReviewer(config=config)
         focus_list = list(focus) if focus else None
+        
+        # Handle cost estimation
+        if estimate:
+            estimator = CostEstimator(model=config.model)
+            cost_estimate = estimator.estimate_diff(diff_content, focus=focus_list)
+            print_cost_estimate(cost_estimate, console)
+            return
+        
+        reviewer = CodeReviewer(config=config)
         result = reviewer.review_diff(diff_content, focus=focus_list)
         
         if output_format == "rich":
@@ -399,6 +447,70 @@ def pr(
         console.print(f"[red bold]Rate Limit Exceeded[/]")
         console.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@main.command()
+@click.argument("paths", nargs=-1, required=True)
+@click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
+@click.option("--recursive", "-r", is_flag=True, help="Recursively review directories")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob)")
+@click.option("--model", "-m", help="Model to estimate costs for (overrides config)")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
+def estimate(
+    paths: tuple[str, ...],
+    focus: tuple[str, ...],
+    recursive: bool,
+    exclude: tuple[str, ...],
+    model: Optional[str],
+    output_format: str,
+) -> None:
+    """Estimate review cost without running the review.
+    
+    Shows token counts and estimated API costs for the specified files.
+    Useful for budgeting and understanding costs before committing to a review.
+    
+    Examples:
+        coderev estimate src/
+        coderev estimate *.py --model gpt-4o
+        coderev estimate . -r --exclude "*.test.py"
+    """
+    import json as json_module
+    from coderev.cost import CostEstimator
+    
+    try:
+        config = Config.load()
+        
+        files = collect_files(paths, recursive, exclude)
+        
+        if not files:
+            console.print("[yellow]No files to estimate[/]")
+            return
+        
+        focus_list = list(focus) if focus else None
+        model_name = model or config.model
+        
+        estimator = CostEstimator(model=model_name)
+        cost_estimate = estimator.estimate_files(files, focus=focus_list)
+        
+        if output_format == "json":
+            result = {
+                "model": cost_estimate.model,
+                "file_count": cost_estimate.file_count,
+                "skipped_files": cost_estimate.skipped_files,
+                "input_tokens": cost_estimate.input_tokens,
+                "estimated_output_tokens": cost_estimate.estimated_output_tokens,
+                "total_tokens": cost_estimate.total_tokens,
+                "input_cost_usd": round(cost_estimate.input_cost_usd, 6),
+                "output_cost_usd": round(cost_estimate.output_cost_usd, 6),
+                "total_cost_usd": round(cost_estimate.total_cost_usd, 6),
+            }
+            click.echo(json_module.dumps(result, indent=2))
+        else:
+            print_cost_estimate(cost_estimate, console)
+    
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         sys.exit(1)

@@ -36,6 +36,12 @@ from coderev.providers import (
     get_provider,
     detect_provider_from_model,
 )
+from coderev.cost import (
+    CostEstimator,
+    CostEstimate,
+    count_tokens,
+    get_model_pricing,
+)
 
 __version__ = "0.4.0"
 __all__ = [
@@ -45,6 +51,11 @@ __all__ = [
     "review_files_parallel",
     "ReviewResult", 
     "Issue",
+    # Cost estimation
+    "CostEstimator",
+    "CostEstimate",
+    "count_tokens",
+    "get_model_pricing",
     # Errors
     "BinaryFileError",
     "RateLimitError",
