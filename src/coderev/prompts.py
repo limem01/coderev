@@ -141,6 +141,70 @@ Only output valid JSON, no other text.""")
     return "".join(parts)
 
 
+def build_inline_suggestions_prompt(
+    code: str,
+    language: str | None = None,
+    focus: list[str] | None = None,
+    context: str | None = None,
+) -> str:
+    """Build the prompt for generating line-by-line inline suggestions.
+    
+    This prompt specifically requests code suggestions that map to exact
+    line numbers, suitable for inline display or diff-style output.
+    """
+    parts = []
+    
+    parts.append("Analyze the following code and provide specific, line-by-line improvement suggestions:\n")
+    
+    if language:
+        parts.append(f"Language: {language}\n")
+    
+    if focus:
+        parts.append(f"Focus areas: {', '.join(focus)}\n")
+    
+    if context:
+        parts.append(f"Context: {context}\n")
+    
+    # Add line numbers to the code for reference
+    lines = code.split('\n')
+    numbered_lines = [f"{i+1:4d} | {line}" for i, line in enumerate(lines)]
+    numbered_code = '\n'.join(numbered_lines)
+    
+    parts.append(f"\n```{language or ''}\n{numbered_code}\n```\n")
+    
+    parts.append("""
+For each issue you find, provide the exact original code and your suggested replacement.
+Be precise about line numbers - use the line numbers shown above.
+
+Respond with a JSON object containing:
+{
+  "summary": "Brief overall assessment",
+  "inline_suggestions": [
+    {
+      "start_line": <first line number of the code to change>,
+      "end_line": <last line number of the code to change (same as start_line for single-line changes)>,
+      "original_code": "The exact original code from those lines",
+      "suggested_code": "Your improved version of that code",
+      "explanation": "Brief explanation of why this change improves the code",
+      "severity": "critical|high|medium|low",
+      "category": "bug|security|performance|style|architecture"
+    }
+  ],
+  "score": <0-100 overall code quality score>,
+  "positive": ["List of things done well"]
+}
+
+Important:
+- Include the EXACT original code from the specified lines (preserving indentation)
+- Provide suggested_code that can directly replace the original
+- For multi-line changes, include all lines from start_line to end_line
+- Focus on meaningful improvements, not trivial style changes
+
+Only output valid JSON, no other text.""")
+    
+    return "".join(parts)
+
+
 def build_pr_prompt(
     pr_title: str,
     pr_description: str | None,

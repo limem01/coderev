@@ -108,7 +108,12 @@ def is_binary_file(file_path: Path) -> bool:
 
 from coderev.cache import ReviewCache
 from coderev.config import Config
-from coderev.prompts import SYSTEM_PROMPT, build_review_prompt, build_diff_prompt
+from coderev.prompts import (
+    SYSTEM_PROMPT,
+    build_review_prompt,
+    build_diff_prompt,
+    build_inline_suggestions_prompt,
+)
 from coderev.providers import (
     BaseProvider,
     RateLimitError,
@@ -152,6 +157,43 @@ class Category(str, Enum):
 
 
 @dataclass
+class InlineSuggestion:
+    """Represents a line-by-line inline code suggestion.
+    
+    This captures both the original lines and the suggested replacement,
+    allowing for precise, actionable code improvements.
+    """
+    
+    start_line: int
+    end_line: int
+    original_code: str
+    suggested_code: str
+    explanation: str
+    severity: Severity
+    category: Category
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "InlineSuggestion":
+        """Create an InlineSuggestion from API response data."""
+        return cls(
+            start_line=data.get("start_line", 1),
+            end_line=data.get("end_line", data.get("start_line", 1)),
+            original_code=data.get("original_code", ""),
+            suggested_code=data.get("suggested_code", ""),
+            explanation=data.get("explanation", ""),
+            severity=Severity(data.get("severity", "medium")),
+            category=Category(data.get("category", "style")),
+        )
+    
+    @property
+    def line_range(self) -> str:
+        """Get human-readable line range string."""
+        if self.start_line == self.end_line:
+            return f"L{self.start_line}"
+        return f"L{self.start_line}-{self.end_line}"
+
+
+@dataclass
 class Issue:
     """Represents a single code review issue."""
     
@@ -189,6 +231,7 @@ class ReviewResult:
     positive: list[str] = field(default_factory=list)
     verdict: str | None = None  # For PR reviews
     raw_response: dict[str, Any] = field(default_factory=dict)
+    inline_suggestions: list[InlineSuggestion] = field(default_factory=list)
     
     @property
     def critical_count(self) -> int:
@@ -215,6 +258,10 @@ class ReviewResult:
                 grouped[key] = []
             grouped[key].append(issue)
         return grouped
+    
+    def suggestions_by_line(self) -> list[InlineSuggestion]:
+        """Return inline suggestions sorted by line number."""
+        return sorted(self.inline_suggestions, key=lambda s: s.start_line)
 
 
 class CodeReviewer:
@@ -493,6 +540,132 @@ class CodeReviewer:
             score=response.get("score", 0),
             positive=response.get("positive", []),
             raw_response=response,
+        )
+    
+    def review_with_inline_suggestions(
+        self,
+        code: str,
+        language: str | None = None,
+        focus: list[str] | None = None,
+        context: str | None = None,
+        use_cache: bool = True,
+    ) -> ReviewResult:
+        """Review code and generate line-by-line inline suggestions.
+        
+        This method provides precise, actionable code suggestions that map
+        directly to specific lines in the original code. Each suggestion
+        includes both the original code and the suggested replacement.
+        
+        Args:
+            code: The code to review.
+            language: Programming language (optional, for better analysis).
+            focus: List of focus areas (e.g., ['security', 'performance']).
+            context: Additional context (e.g., file path).
+            use_cache: Whether to use cached results if available.
+            
+        Returns:
+            ReviewResult containing inline_suggestions with line-specific fixes.
+            
+        Example:
+            result = reviewer.review_with_inline_suggestions(code, language="python")
+            for suggestion in result.suggestions_by_line():
+                print(f"{suggestion.line_range}: {suggestion.explanation}")
+                print(f"  - {suggestion.original_code}")
+                print(f"  + {suggestion.suggested_code}")
+        """
+        focus = focus or self.config.focus
+        
+        # Use a different cache key marker for inline suggestions
+        cache_language = f"inline:{language}" if language else "inline"
+        
+        # Check cache first
+        if use_cache:
+            cached = self.cache.get(code, self.model, focus, cache_language)
+            if cached is not None:
+                inline_suggestions = [
+                    InlineSuggestion.from_dict(s) 
+                    for s in cached.get("inline_suggestions", [])
+                ]
+                return ReviewResult(
+                    summary=cached.get("summary", "Review completed (cached)"),
+                    issues=[],
+                    inline_suggestions=inline_suggestions,
+                    score=cached.get("score", 0),
+                    positive=cached.get("positive", []),
+                    raw_response=cached,
+                )
+        
+        prompt = build_inline_suggestions_prompt(code, language, focus, context)
+        response = self._call_api(prompt)
+        
+        # Cache the result
+        if use_cache:
+            self.cache.set(code, self.model, response, focus, cache_language)
+        
+        inline_suggestions = [
+            InlineSuggestion.from_dict(s) 
+            for s in response.get("inline_suggestions", [])
+        ]
+        
+        return ReviewResult(
+            summary=response.get("summary", "Inline review completed"),
+            issues=[],
+            inline_suggestions=inline_suggestions,
+            score=response.get("score", 0),
+            positive=response.get("positive", []),
+            raw_response=response,
+        )
+    
+    def review_file_with_inline_suggestions(
+        self,
+        file_path: Path | str,
+        focus: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> ReviewResult:
+        """Review a file and generate line-by-line inline suggestions.
+        
+        This is a convenience method that reads a file and calls
+        review_with_inline_suggestions with automatic language detection.
+        
+        Args:
+            file_path: Path to the file to review.
+            focus: Optional list of focus areas for the review.
+            use_cache: Whether to use cached results if available.
+            
+        Returns:
+            ReviewResult containing inline_suggestions with line-specific fixes.
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist.
+            BinaryFileError: If the file is binary and cannot be reviewed.
+            ValueError: If the file exceeds the maximum size limit.
+        """
+        file_path = Path(file_path)
+        
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        if is_binary_file(file_path):
+            raise BinaryFileError(file_path)
+        
+        if file_path.stat().st_size > self.config.max_file_size:
+            raise ValueError(
+                f"File too large: {file_path.stat().st_size} bytes "
+                f"(max: {self.config.max_file_size})"
+            )
+        
+        try:
+            code = file_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as e:
+            raise BinaryFileError(
+                file_path, 
+                f"Cannot decode file as UTF-8 (likely binary): {file_path}"
+            ) from e
+        
+        language = self._detect_language(file_path) if self.config.language_hints else None
+        
+        return self.review_with_inline_suggestions(
+            code, language, focus, context=str(file_path), use_cache=use_cache
         )
     
     def review_files(

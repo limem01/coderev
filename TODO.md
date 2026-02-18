@@ -5,7 +5,7 @@
 - [x] Implement caching for repeated reviews
 - [x] Add support for OpenAI models (GPT-4)
 - [x] Create `.coderev` ignore file support
-- [ ] Add line-by-line inline suggestions
+- [x] Add line-by-line inline suggestions
 
 ## Phase 2: Integrations (Week 2-3)
 - [ ] GitLab MR support
