@@ -55,6 +55,7 @@ all = [
 
 [project.scripts]
 coderev = "coderev.cli:main"
+coderev-precommit = "coderev.precommit:main"
 
 [project.urls]
 Homepage = "https://github.com/khalil/coderev"

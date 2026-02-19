@@ -11,7 +11,7 @@
 - [ ] GitLab MR support
 - [ ] Bitbucket PR support
 - [ ] VS Code extension
-- [ ] Pre-commit hook package
+- [x] Pre-commit hook package
 - [ ] GitHub Action (published to marketplace)
 
 ## Phase 3: Advanced Features (Week 3-4)

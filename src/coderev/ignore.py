@@ -130,3 +130,20 @@ class CodeRevIgnore:
     def disable_defaults(self) -> None:
         """Disable default ignore patterns."""
         self._include_defaults = False
+
+
+def should_ignore(path: Path | str, additional_patterns: list[str] | None = None) -> bool:
+    """Convenience function to check if a path should be ignored.
+    
+    Args:
+        path: The path to check.
+        additional_patterns: Optional list of additional patterns to check against.
+    
+    Returns:
+        True if the path should be ignored.
+    """
+    ignorer = CodeRevIgnore.load()
+    if additional_patterns:
+        for pattern in additional_patterns:
+            ignorer.add_pattern(pattern)
+    return ignorer.should_ignore(path)

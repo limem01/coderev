@@ -1,0 +1,32 @@
+# Pre-commit hook definitions for CodeRev
+# See: https://pre-commit.com
+
+- id: coderev
+  name: CodeRev AI Code Review
+  description: Run AI-powered code review on staged files
+  entry: coderev-precommit
+  language: python
+  types: [file]
+  types_or: [python, javascript, typescript, java, go, rust, c, cpp]
+  require_serial: true  # API calls should not run in parallel to avoid rate limits
+  stages: [pre-commit]
+
+- id: coderev-security
+  name: CodeRev Security Review
+  description: Run AI-powered security-focused code review
+  entry: coderev-precommit --focus security
+  language: python
+  types: [file]
+  types_or: [python, javascript, typescript, java, go, rust, c, cpp]
+  require_serial: true
+  stages: [pre-commit]
+
+- id: coderev-strict
+  name: CodeRev Strict Review
+  description: Run AI-powered code review that fails on high severity issues
+  entry: coderev-precommit --fail-on high
+  language: python
+  types: [file]
+  types_or: [python, javascript, typescript, java, go, rust, c, cpp]
+  require_serial: true
+  stages: [pre-commit]
