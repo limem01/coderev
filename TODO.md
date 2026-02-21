@@ -15,7 +15,7 @@
 - [ ] GitHub Action (published to marketplace)
 
 ## Phase 3: Advanced Features (Week 3-4)
-- [ ] Custom rule definitions (YAML)
+- [x] Custom rule definitions (YAML)
 - [ ] Team configuration sharing
 - [ ] Review history and tracking
 - [ ] Diff viewer with annotations

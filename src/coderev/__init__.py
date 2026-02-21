@@ -42,8 +42,19 @@ from coderev.cost import (
     count_tokens,
     get_model_pricing,
 )
+from coderev.rules import (
+    Rule,
+    RuleSet,
+    RuleValidationError,
+    load_rules,
+    load_rules_from_file,
+    find_rules_file,
+    get_builtin_rule,
+    list_builtin_rules,
+    BUILTIN_RULES,
+)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     # Core
     "CodeReviewer",
@@ -56,6 +67,16 @@ __all__ = [
     "CostEstimate",
     "count_tokens",
     "get_model_pricing",
+    # Rules
+    "Rule",
+    "RuleSet",
+    "RuleValidationError",
+    "load_rules",
+    "load_rules_from_file",
+    "find_rules_file",
+    "get_builtin_rule",
+    "list_builtin_rules",
+    "BUILTIN_RULES",
     # Errors
     "BinaryFileError",
     "RateLimitError",

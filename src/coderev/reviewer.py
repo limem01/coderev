@@ -120,6 +120,7 @@ from coderev.providers import (
     ProviderError,
     get_provider,
 )
+from coderev.rules import RuleSet, load_rules
 
 
 class BinaryFileError(Exception):
@@ -290,6 +291,9 @@ class CodeReviewer:
         cache_ttl_hours: int | None = None,
         cache_dir: Path | str | None = None,
         provider: str | None = None,
+        rules: RuleSet | None = None,
+        rules_path: Path | str | None = None,
+        auto_load_rules: bool = True,
     ):
         """Initialize the code reviewer.
         
@@ -301,6 +305,9 @@ class CodeReviewer:
             cache_ttl_hours: Cache TTL in hours. Defaults to 168 (1 week).
             cache_dir: Directory for cache storage.
             provider: LLM provider ('anthropic' or 'openai'). Auto-detected if not specified.
+            rules: Pre-loaded RuleSet to use (takes precedence over rules_path).
+            rules_path: Path to custom rules YAML file.
+            auto_load_rules: If True and no rules provided, auto-discover rules file.
         """
         self.config = config or Config.load()
         self.model = model or self.config.model
@@ -343,6 +350,16 @@ class CodeReviewer:
             ttl_hours=cache_ttl_hours or 168,  # 1 week default
             enabled=cache_enabled,
         )
+        
+        # Initialize rules
+        if rules:
+            self.rules = rules
+        elif rules_path:
+            self.rules = load_rules(rules_path)
+        elif auto_load_rules:
+            self.rules = load_rules()  # Auto-discover
+        else:
+            self.rules = RuleSet()
     
     def _call_api(self, prompt: str) -> dict[str, Any]:
         """Call the LLM API and parse JSON response.
@@ -393,6 +410,7 @@ class CodeReviewer:
         focus: list[str] | None = None,
         context: str | None = None,
         use_cache: bool = True,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
         """Review a code snippet.
         
@@ -402,11 +420,13 @@ class CodeReviewer:
             focus: List of focus areas (e.g., ['security', 'performance']).
             context: Additional context (e.g., file path).
             use_cache: Whether to use cached results if available.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             ReviewResult containing the review findings.
         """
         focus = focus or self.config.focus
+        effective_rules = rules if rules is not None else self.rules
         
         # Check cache first
         if use_cache:
@@ -422,7 +442,7 @@ class CodeReviewer:
                     raw_response=cached,
                 )
         
-        prompt = build_review_prompt(code, language, focus, context)
+        prompt = build_review_prompt(code, language, focus, context, rules=effective_rules)
         response = self._call_api(prompt)
         
         # Cache the result
@@ -444,6 +464,7 @@ class CodeReviewer:
         file_path: Path | str,
         focus: list[str] | None = None,
         use_cache: bool = True,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
         """Review a single file.
         
@@ -451,6 +472,7 @@ class CodeReviewer:
             file_path: Path to the file to review.
             focus: Optional list of focus areas for the review.
             use_cache: Whether to use cached results if available.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             ReviewResult containing the review findings.
@@ -486,7 +508,7 @@ class CodeReviewer:
         
         language = self._detect_language(file_path) if self.config.language_hints else None
         
-        result = self.review_code(code, language, focus, context=str(file_path), use_cache=use_cache)
+        result = self.review_code(code, language, focus, context=str(file_path), use_cache=use_cache, rules=rules)
         
         # Set file path on all issues
         for issue in result.issues:
@@ -499,6 +521,7 @@ class CodeReviewer:
         diff: str,
         focus: list[str] | None = None,
         use_cache: bool = True,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
         """Review a git diff.
         
@@ -506,11 +529,13 @@ class CodeReviewer:
             diff: The git diff string to review.
             focus: List of focus areas (e.g., ['security', 'performance']).
             use_cache: Whether to use cached results if available.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             ReviewResult containing the review findings.
         """
         focus = focus or self.config.focus
+        effective_rules = rules if rules is not None else self.rules
         
         # Check cache first (use 'diff' as language marker for cache key distinction)
         if use_cache:
@@ -525,7 +550,7 @@ class CodeReviewer:
                     raw_response=cached,
                 )
         
-        prompt = build_diff_prompt(diff, focus)
+        prompt = build_diff_prompt(diff, focus, rules=effective_rules)
         response = self._call_api(prompt)
         
         # Cache the result
@@ -549,6 +574,7 @@ class CodeReviewer:
         focus: list[str] | None = None,
         context: str | None = None,
         use_cache: bool = True,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
         """Review code and generate line-by-line inline suggestions.
         
@@ -562,6 +588,7 @@ class CodeReviewer:
             focus: List of focus areas (e.g., ['security', 'performance']).
             context: Additional context (e.g., file path).
             use_cache: Whether to use cached results if available.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             ReviewResult containing inline_suggestions with line-specific fixes.
@@ -574,6 +601,7 @@ class CodeReviewer:
                 print(f"  + {suggestion.suggested_code}")
         """
         focus = focus or self.config.focus
+        effective_rules = rules if rules is not None else self.rules
         
         # Use a different cache key marker for inline suggestions
         cache_language = f"inline:{language}" if language else "inline"
@@ -595,7 +623,7 @@ class CodeReviewer:
                     raw_response=cached,
                 )
         
-        prompt = build_inline_suggestions_prompt(code, language, focus, context)
+        prompt = build_inline_suggestions_prompt(code, language, focus, context, rules=effective_rules)
         response = self._call_api(prompt)
         
         # Cache the result
@@ -621,6 +649,7 @@ class CodeReviewer:
         file_path: Path | str,
         focus: list[str] | None = None,
         use_cache: bool = True,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
         """Review a file and generate line-by-line inline suggestions.
         
@@ -631,6 +660,7 @@ class CodeReviewer:
             file_path: Path to the file to review.
             focus: Optional list of focus areas for the review.
             use_cache: Whether to use cached results if available.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             ReviewResult containing inline_suggestions with line-specific fixes.
@@ -665,7 +695,7 @@ class CodeReviewer:
         language = self._detect_language(file_path) if self.config.language_hints else None
         
         return self.review_with_inline_suggestions(
-            code, language, focus, context=str(file_path), use_cache=use_cache
+            code, language, focus, context=str(file_path), use_cache=use_cache, rules=rules
         )
     
     def review_files(
@@ -673,6 +703,7 @@ class CodeReviewer:
         file_paths: list[Path | str],
         focus: list[str] | None = None,
         use_cache: bool = True,
+        rules: RuleSet | None = None,
     ) -> dict[str, ReviewResult]:
         """Review multiple files and return results by file.
         
@@ -682,6 +713,7 @@ class CodeReviewer:
             file_paths: List of file paths to review.
             focus: List of focus areas for the review.
             use_cache: Whether to use cached results if available.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             Dictionary mapping file paths to their review results.
@@ -690,7 +722,7 @@ class CodeReviewer:
         for path in file_paths:
             path = Path(path)
             try:
-                results[str(path)] = self.review_file(path, focus, use_cache=use_cache)
+                results[str(path)] = self.review_file(path, focus, use_cache=use_cache, rules=rules)
             except BinaryFileError as e:
                 results[str(path)] = ReviewResult(
                     summary=f"Skipped: {e.message}",

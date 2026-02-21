@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import unicodedata
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from coderev.rules import RuleSet
 
 
 def normalize_unicode(text: str) -> str:
@@ -56,8 +60,20 @@ def build_review_prompt(
     language: str | None = None,
     focus: list[str] | None = None,
     context: str | None = None,
+    rules: "RuleSet | None" = None,
 ) -> str:
-    """Build the review prompt for a code snippet."""
+    """Build the review prompt for a code snippet.
+    
+    Args:
+        code: The code to review.
+        language: Programming language (optional).
+        focus: List of focus areas.
+        context: Additional context.
+        rules: Optional custom rules to apply.
+        
+    Returns:
+        Formatted prompt string.
+    """
     parts = []
     
     parts.append("Review the following code and identify issues:\n")
@@ -70,6 +86,12 @@ def build_review_prompt(
     
     if context:
         parts.append(f"Context: {context}\n")
+    
+    # Add custom rules if provided
+    if rules:
+        rules_text = rules.to_prompt_text(language)
+        if rules_text:
+            parts.append(rules_text)
     
     parts.append(f"\n```{language or ''}\n{code}\n```\n")
     
@@ -100,10 +122,19 @@ Only output valid JSON, no other text.""")
 def build_diff_prompt(
     diff: str,
     focus: list[str] | None = None,
+    rules: "RuleSet | None" = None,
 ) -> str:
     """Build the review prompt for a git diff.
     
     Unicode content in the diff is normalized for consistent handling.
+    
+    Args:
+        diff: The git diff to review.
+        focus: List of focus areas.
+        rules: Optional custom rules to apply.
+        
+    Returns:
+        Formatted prompt string.
     """
     parts = []
     
@@ -111,6 +142,12 @@ def build_diff_prompt(
     
     if focus:
         parts.append(f"Focus areas: {', '.join(focus)}\n")
+    
+    # Add custom rules if provided
+    if rules:
+        rules_text = rules.to_prompt_text()
+        if rules_text:
+            parts.append(rules_text)
     
     # Normalize unicode in diff content
     normalized_diff = normalize_unicode(diff)
@@ -146,11 +183,22 @@ def build_inline_suggestions_prompt(
     language: str | None = None,
     focus: list[str] | None = None,
     context: str | None = None,
+    rules: "RuleSet | None" = None,
 ) -> str:
     """Build the prompt for generating line-by-line inline suggestions.
     
     This prompt specifically requests code suggestions that map to exact
     line numbers, suitable for inline display or diff-style output.
+    
+    Args:
+        code: The code to review.
+        language: Programming language (optional).
+        focus: List of focus areas.
+        context: Additional context.
+        rules: Optional custom rules to apply.
+        
+    Returns:
+        Formatted prompt string.
     """
     parts = []
     
@@ -164,6 +212,12 @@ def build_inline_suggestions_prompt(
     
     if context:
         parts.append(f"Context: {context}\n")
+    
+    # Add custom rules if provided
+    if rules:
+        rules_text = rules.to_prompt_text(language)
+        if rules_text:
+            parts.append(rules_text)
     
     # Add line numbers to the code for reference
     lines = code.split('\n')
@@ -210,8 +264,20 @@ def build_pr_prompt(
     pr_description: str | None,
     files_changed: list[dict],
     focus: list[str] | None = None,
+    rules: "RuleSet | None" = None,
 ) -> str:
-    """Build the review prompt for a pull request."""
+    """Build the review prompt for a pull request.
+    
+    Args:
+        pr_title: Title of the pull request.
+        pr_description: Description of the pull request.
+        files_changed: List of changed files with patches.
+        focus: List of focus areas.
+        rules: Optional custom rules to apply.
+        
+    Returns:
+        Formatted prompt string.
+    """
     parts = []
     
     parts.append(f"Review this pull request:\n\nTitle: {pr_title}\n")
@@ -221,6 +287,12 @@ def build_pr_prompt(
     
     if focus:
         parts.append(f"Focus areas: {', '.join(focus)}\n")
+    
+    # Add custom rules if provided
+    if rules:
+        rules_text = rules.to_prompt_text()
+        if rules_text:
+            parts.append(rules_text)
     
     parts.append("\nFiles changed:\n")
     

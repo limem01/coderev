@@ -61,7 +61,7 @@ class TestCLI:
     def test_version(self, runner):
         result = runner.invoke(main, ["--version"])
         assert result.exit_code == 0
-        assert "0.4.0" in result.output
+        assert "0.5.0" in result.output
     
     def test_init_creates_config(self, runner, tmp_path):
         with runner.isolated_filesystem(temp_dir=tmp_path):
