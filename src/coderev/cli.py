@@ -554,5 +554,148 @@ language_hints = true
     console.print("[dim]Edit the file to add your API keys and customize settings.[/]")
 
 
+@main.command()
+@click.argument("paths", nargs=-1, required=True)
+@click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
+@click.option("--recursive", "-r", is_flag=True, help="Recursively review directories")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob)")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json", "markdown", "html"]), default="rich")
+@click.option("--output", "-o", "output_file", type=click.Path(), help="Output file path (default: stdout)")
+@click.option("--parallel/--no-parallel", default=True, help="Review files in parallel (default: enabled)")
+@click.option("--max-concurrent", "-c", type=int, default=5, help="Max concurrent reviews when using parallel mode")
+@click.option("--fail-on", type=click.Choice(["critical", "high", "medium", "low"]), help="Exit with error if issues of this severity or higher are found")
+def batch(
+    paths: tuple[str, ...],
+    focus: tuple[str, ...],
+    recursive: bool,
+    exclude: tuple[str, ...],
+    output_format: str,
+    output_file: Optional[str],
+    parallel: bool,
+    max_concurrent: int,
+    fail_on: Optional[str],
+) -> None:
+    """Batch review multiple files and generate a summary report.
+    
+    Reviews all specified files/directories and produces a comprehensive
+    summary report with aggregated statistics, health grades, and actionable
+    insights.
+    
+    The report includes:
+    - Overall health grade (A-F) based on average score
+    - Issue counts by severity and category
+    - Per-file breakdown with scores
+    - Blocking issues (critical/high) highlighted
+    - Recommendations for files needing attention
+    
+    Examples:
+        coderev batch src/
+        coderev batch . -r --exclude "*.test.py" --format markdown -o report.md
+        coderev batch src/ tests/ --format html -o report.html
+        coderev batch . -r --fail-on high  # CI mode: exit 1 if high/critical issues
+    """
+    import asyncio
+    import json as json_module
+    from coderev.async_reviewer import AsyncCodeReviewer
+    from coderev.batch import (
+        BatchReviewReport,
+        format_batch_report_rich,
+        format_batch_report_markdown,
+        format_batch_report_html,
+    )
+    
+    try:
+        config = Config.load()
+        errors = config.validate()
+        if errors:
+            for error in errors:
+                console.print(f"[red]Config error: {error}[/]")
+            sys.exit(1)
+        
+        files = collect_files(paths, recursive, exclude)
+        
+        if not files:
+            console.print("[yellow]No files to review[/]")
+            return
+        
+        focus_list = list(focus) if focus else None
+        
+        console.print(f"[bold blue]Batch Review[/] - {len(files)} files")
+        
+        # Use parallel processing for multiple files
+        use_parallel = parallel and len(files) > 1
+        
+        if use_parallel:
+            console.print(f"[dim]Reviewing in parallel (max {max_concurrent} concurrent)...[/]")
+            
+            async def run_parallel_review():
+                async with AsyncCodeReviewer(
+                    config=config,
+                    max_concurrent=max_concurrent,
+                ) as reviewer:
+                    return await reviewer.review_files_async(files, focus=focus_list)
+            
+            results = asyncio.run(run_parallel_review())
+        else:
+            console.print("[dim]Reviewing files sequentially...[/]")
+            reviewer = CodeReviewer(config=config)
+            results = reviewer.review_files([str(f) for f in files], focus=focus_list)
+        
+        # Generate batch report
+        report = BatchReviewReport.from_results(results)
+        
+        # Output the report
+        if output_format == "rich":
+            format_batch_report_rich(report, console)
+        elif output_format == "json":
+            output = json_module.dumps(report.to_dict(), indent=2)
+            if output_file:
+                Path(output_file).write_text(output)
+                console.print(f"[green]Report saved to {output_file}[/]")
+            else:
+                click.echo(output)
+        elif output_format == "markdown":
+            output = format_batch_report_markdown(report)
+            if output_file:
+                Path(output_file).write_text(output)
+                console.print(f"[green]Report saved to {output_file}[/]")
+            else:
+                click.echo(output)
+        elif output_format == "html":
+            output = format_batch_report_html(report)
+            if output_file:
+                Path(output_file).write_text(output)
+                console.print(f"[green]Report saved to {output_file}[/]")
+            else:
+                click.echo(output)
+        
+        # Check fail condition
+        if fail_on:
+            severity_order = ["low", "medium", "high", "critical"]
+            min_severity_idx = severity_order.index(fail_on)
+            
+            should_fail = False
+            if min_severity_idx <= 3 and report.critical_issues > 0:
+                should_fail = True
+            if min_severity_idx <= 2 and report.high_issues > 0:
+                should_fail = True
+            if min_severity_idx <= 1 and report.medium_issues > 0:
+                should_fail = True
+            if min_severity_idx <= 0 and report.low_issues > 0:
+                should_fail = True
+            
+            if should_fail:
+                console.print(f"\n[red bold]FAIL: Issues found at or above '{fail_on}' severity[/]")
+                sys.exit(1)
+    
+    except RateLimitError as e:
+        console.print(f"[red bold]Rate Limit Exceeded[/]")
+        console.print(f"[yellow]{e.message}[/]")
+        sys.exit(2)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
