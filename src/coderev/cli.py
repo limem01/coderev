@@ -697,5 +697,258 @@ def batch(
         sys.exit(1)
 
 
+@main.group()
+def history() -> None:
+    """Manage review history and tracking."""
+    pass
+
+
+@history.command("list")
+@click.option("--limit", "-n", type=int, default=10, help="Number of entries to show")
+@click.option("--file", "-f", "file_path", help="Filter by file path")
+@click.option("--severity", "-s", type=click.Choice(["critical", "high", "medium", "low"]), help="Filter by minimum severity")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
+def history_list(
+    limit: int,
+    file_path: Optional[str],
+    severity: Optional[str],
+    output_format: str,
+) -> None:
+    """List recent review entries.
+    
+    Shows the most recent code reviews with their scores and issue counts.
+    Use filters to narrow down results by file or severity.
+    
+    Examples:
+        coderev history list
+        coderev history list --limit 20
+        coderev history list --file main.py
+        coderev history list --severity high
+    """
+    import json as json_module
+    from coderev.history import ReviewHistory
+    
+    try:
+        history_store = ReviewHistory()
+        
+        if file_path:
+            entries = history_store.get_by_file(file_path, limit=limit)
+        elif severity:
+            entries = history_store.get_by_severity(severity, limit=limit)
+        else:
+            entries = history_store.get_recent(limit=limit)
+        
+        if not entries:
+            console.print("[yellow]No review history found[/]")
+            return
+        
+        if output_format == "json":
+            data = [e.to_dict() for e in entries]
+            click.echo(json_module.dumps(data, indent=2, default=str))
+        else:
+            from rich.table import Table
+            
+            table = Table(title=f"Recent Reviews ({len(entries)} entries)")
+            table.add_column("Date", style="dim")
+            table.add_column("File", style="cyan")
+            table.add_column("Score", justify="center")
+            table.add_column("Issues", justify="center")
+            table.add_column("Model", style="dim")
+            
+            for entry in entries:
+                # Format date
+                dt_str = entry.timestamp[:16].replace("T", " ")
+                
+                # Format score with color
+                if entry.score >= 80:
+                    score_str = f"[green]{entry.score}[/]"
+                elif entry.score >= 60:
+                    score_str = f"[yellow]{entry.score}[/]"
+                else:
+                    score_str = f"[red]{entry.score}[/]"
+                
+                # Format issues with severity breakdown
+                issue_parts = []
+                if entry.critical_count > 0:
+                    issue_parts.append(f"[red]{entry.critical_count}C[/]")
+                if entry.high_count > 0:
+                    issue_parts.append(f"[orange1]{entry.high_count}H[/]")
+                if entry.medium_count > 0:
+                    issue_parts.append(f"[yellow]{entry.medium_count}M[/]")
+                if entry.low_count > 0:
+                    issue_parts.append(f"[dim]{entry.low_count}L[/]")
+                issues_str = " ".join(issue_parts) if issue_parts else "[green]0[/]"
+                
+                table.add_row(
+                    dt_str,
+                    entry.file_path or entry.review_type,
+                    score_str,
+                    issues_str,
+                    entry.model,
+                )
+            
+            console.print(table)
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@history.command("stats")
+@click.option("--days", "-d", type=int, help="Only include reviews from last N days")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
+def history_stats(days: Optional[int], output_format: str) -> None:
+    """Show review history statistics.
+    
+    Displays aggregated statistics including total reviews, average scores,
+    issue breakdowns, and trends over time.
+    
+    Examples:
+        coderev history stats
+        coderev history stats --days 30
+        coderev history stats --format json
+    """
+    import json as json_module
+    from coderev.history import ReviewHistory
+    
+    try:
+        history_store = ReviewHistory()
+        stats = history_store.get_stats(days=days)
+        
+        if stats.total_reviews == 0:
+            console.print("[yellow]No review history found[/]")
+            return
+        
+        if output_format == "json":
+            click.echo(json_module.dumps(stats.to_dict(), indent=2, default=str))
+        else:
+            from rich.table import Table
+            from rich.panel import Panel
+            
+            # Overview panel
+            overview = Table(show_header=False, box=None, padding=(0, 2))
+            overview.add_column("Label", style="dim")
+            overview.add_column("Value", style="bold")
+            
+            overview.add_row("Total Reviews", str(stats.total_reviews))
+            overview.add_row("Unique Files", str(stats.total_files))
+            overview.add_row("Total Issues", str(stats.total_issues))
+            overview.add_row("Average Score", f"{stats.average_score:.1f}/100")
+            
+            if stats.first_review:
+                overview.add_row("First Review", stats.first_review[:10])
+            if stats.last_review:
+                overview.add_row("Last Review", stats.last_review[:10])
+            
+            console.print(Panel(overview, title="[bold blue]Overview[/]", border_style="blue"))
+            
+            # Issues by severity
+            severity_table = Table(title="Issues by Severity")
+            severity_table.add_column("Severity")
+            severity_table.add_column("Count", justify="right")
+            
+            severity_table.add_row("[red]Critical[/]", str(stats.critical_issues))
+            severity_table.add_row("[orange1]High[/]", str(stats.high_issues))
+            severity_table.add_row("[yellow]Medium[/]", str(stats.medium_issues))
+            severity_table.add_row("[dim]Low[/]", str(stats.low_issues))
+            
+            console.print(severity_table)
+            
+            # Reviews by type
+            if stats.reviews_by_type:
+                type_table = Table(title="Reviews by Type")
+                type_table.add_column("Type")
+                type_table.add_column("Count", justify="right")
+                
+                for rtype, count in sorted(stats.reviews_by_type.items(), key=lambda x: -x[1]):
+                    type_table.add_row(rtype, str(count))
+                
+                console.print(type_table)
+            
+            # Reviews by model
+            if stats.reviews_by_model:
+                model_table = Table(title="Reviews by Model")
+                model_table.add_column("Model")
+                model_table.add_column("Count", justify="right")
+                
+                for model, count in sorted(stats.reviews_by_model.items(), key=lambda x: -x[1]):
+                    model_table.add_row(model, str(count))
+                
+                console.print(model_table)
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@history.command("export")
+@click.argument("output_path", type=click.Path())
+def history_export(output_path: str) -> None:
+    """Export review history to a JSON file.
+    
+    Creates a portable backup of all review history that can be imported
+    on another machine or restored later.
+    
+    Example:
+        coderev history export backup.json
+    """
+    from coderev.history import ReviewHistory
+    
+    try:
+        history_store = ReviewHistory()
+        count = history_store.export(output_path)
+        
+        console.print(f"[green]Exported {count} entries to {output_path}[/]")
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@history.command("import")
+@click.argument("input_path", type=click.Path(exists=True))
+def history_import(input_path: str) -> None:
+    """Import review history from a JSON file.
+    
+    Imports previously exported history. Duplicate entries are automatically
+    skipped to prevent data duplication.
+    
+    Example:
+        coderev history import backup.json
+    """
+    from coderev.history import ReviewHistory
+    
+    try:
+        history_store = ReviewHistory()
+        count = history_store.import_from(input_path)
+        
+        console.print(f"[green]Imported {count} entries from {input_path}[/]")
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@history.command("clear")
+@click.confirmation_option(prompt="Are you sure you want to clear all review history?")
+def history_clear() -> None:
+    """Clear all review history.
+    
+    Permanently deletes all stored review history. This action cannot be undone.
+    Consider exporting your history first with 'coderev history export'.
+    """
+    from coderev.history import ReviewHistory
+    
+    try:
+        history_store = ReviewHistory()
+        count = history_store.clear()
+        
+        console.print(f"[yellow]Cleared {count} history entries[/]")
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()

@@ -53,8 +53,13 @@ from coderev.rules import (
     list_builtin_rules,
     BUILTIN_RULES,
 )
+from coderev.history import (
+    ReviewHistory,
+    ReviewEntry,
+    HistoryStats,
+)
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     # Core
     "CodeReviewer",
@@ -77,6 +82,10 @@ __all__ = [
     "get_builtin_rule",
     "list_builtin_rules",
     "BUILTIN_RULES",
+    # History
+    "ReviewHistory",
+    "ReviewEntry",
+    "HistoryStats",
     # Errors
     "BinaryFileError",
     "RateLimitError",
