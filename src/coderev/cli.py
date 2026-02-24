@@ -950,5 +950,170 @@ def history_clear() -> None:
         sys.exit(1)
 
 
+@main.command()
+@click.argument("paths", nargs=-1, required=True)
+@click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
+@click.option("--recursive", "-r", is_flag=True, help="Recursively process directories")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob)")
+@click.option("--write", "-w", is_flag=True, help="Write fixes directly to files (use with caution)")
+@click.option("--backup/--no-backup", default=True, help="Create .bak backup before writing (default: enabled)")
+@click.option("--min-severity", "-s", type=click.Choice(["low", "medium", "high", "critical"]), default="low", help="Minimum severity level to fix")
+@click.option("--category", "-c", multiple=True, help="Only fix specific categories (bug, security, performance, style, architecture)")
+@click.option("--diff", "show_diff", is_flag=True, default=True, help="Show diff of changes (default: enabled)")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json", "diff"]), default="rich")
+@click.option("--output", "-o", "output_file", type=click.Path(), help="Output fixed code to file instead of stdout")
+def fix(
+    paths: tuple[str, ...],
+    focus: tuple[str, ...],
+    recursive: bool,
+    exclude: tuple[str, ...],
+    write: bool,
+    backup: bool,
+    min_severity: str,
+    category: tuple[str, ...],
+    show_diff: bool,
+    output_format: str,
+    output_file: Optional[str],
+) -> None:
+    """Auto-fix code issues using AI suggestions.
+    
+    Reviews the specified files and automatically applies suggested fixes.
+    By default, shows a diff of proposed changes without modifying files.
+    Use --write to apply changes directly to files.
+    
+    The fixer prioritizes higher-severity issues and handles overlapping
+    suggestions by applying the most critical fix first.
+    
+    Examples:
+        coderev fix main.py                    # Preview fixes for a file
+        coderev fix src/ -r                    # Preview fixes for all files in directory
+        coderev fix main.py --write            # Apply fixes to file (creates .bak backup)
+        coderev fix main.py --write --no-backup  # Apply without backup
+        coderev fix main.py -s high            # Only apply high/critical severity fixes
+        coderev fix main.py -c bug -c security # Only fix bugs and security issues
+        coderev fix main.py -o fixed_main.py   # Output to a different file
+    """
+    import json as json_module
+    from coderev.autofix import AutoFixer, format_fix_diff, format_fix_summary
+    from coderev.reviewer import Severity
+    
+    try:
+        config = Config.load()
+        errors = config.validate()
+        if errors:
+            for error in errors:
+                console.print(f"[red]Config error: {error}[/]")
+            sys.exit(1)
+        
+        files = collect_files(paths, recursive, exclude)
+        
+        if not files:
+            console.print("[yellow]No files to fix[/]")
+            return
+        
+        focus_list = list(focus) if focus else None
+        category_list = list(category) if category else None
+        severity_map = {
+            "low": Severity.LOW,
+            "medium": Severity.MEDIUM,
+            "high": Severity.HIGH,
+            "critical": Severity.CRITICAL,
+        }
+        
+        reviewer = CodeReviewer(config=config)
+        fixer = AutoFixer(
+            reviewer=reviewer,
+            min_severity=severity_map[min_severity],
+            categories=category_list,
+        )
+        
+        total_fixes = 0
+        total_skipped = 0
+        files_changed = 0
+        
+        for file_path in files:
+            console.print(f"\n[bold blue]Analyzing {file_path}...[/]")
+            
+            try:
+                result = fixer.fix_file(
+                    file_path,
+                    focus=focus_list,
+                    write=write,
+                    backup=backup,
+                )
+                
+                total_fixes += result.total_fixes
+                total_skipped += len(result.skipped_fixes)
+                
+                if result.has_changes:
+                    files_changed += 1
+                    
+                    if output_format == "json":
+                        click.echo(json_module.dumps(result.to_dict(), indent=2))
+                    elif output_format == "diff":
+                        click.echo(format_fix_diff(result, use_color=False))
+                    else:  # rich
+                        # Show summary
+                        console.print(f"[green]✓ {result.total_fixes} fixes applied[/]")
+                        if result.skipped_fixes:
+                            console.print(f"[yellow]⚠ {len(result.skipped_fixes)} fixes skipped[/]")
+                        
+                        # Show applied fixes
+                        for fix_item in result.applied_fixes:
+                            severity_style = {
+                                "critical": "red bold",
+                                "high": "orange1",
+                                "medium": "yellow",
+                                "low": "dim",
+                            }.get(fix_item.severity.value, "white")
+                            console.print(f"  [{severity_style}]{fix_item.line_range}[/]: {fix_item.explanation}")
+                        
+                        # Show diff
+                        if show_diff:
+                            from rich.syntax import Syntax
+                            from rich.panel import Panel
+                            
+                            diff_text = ''.join(result.diff_lines)
+                            if diff_text:
+                                syntax = Syntax(diff_text, "diff", theme="monokai", line_numbers=False)
+                                console.print(Panel(syntax, title="[bold]Diff[/]", border_style="dim"))
+                        
+                        if write:
+                            console.print(f"[green]✓ Changes written to {file_path}[/]")
+                            if backup:
+                                console.print(f"[dim]  Backup saved to {file_path}.bak[/]")
+                        elif output_file and len(files) == 1:
+                            # Write to output file
+                            Path(output_file).write_text(result.fixed_code, encoding="utf-8")
+                            console.print(f"[green]✓ Fixed code written to {output_file}[/]")
+                else:
+                    console.print("[dim]No changes needed[/]")
+            
+            except RateLimitError as e:
+                console.print(f"[red bold]Rate Limit Exceeded[/]")
+                console.print(f"[yellow]{e.message}[/]")
+                sys.exit(2)
+            except Exception as e:
+                console.print(f"[red]Error fixing {file_path}: {e}[/]")
+        
+        # Final summary
+        console.print("\n[bold]Summary:[/]")
+        console.print(f"  Files analyzed: {len(files)}")
+        console.print(f"  Files changed: {files_changed}")
+        console.print(f"  Total fixes applied: {total_fixes}")
+        console.print(f"  Total fixes skipped: {total_skipped}")
+        
+        if not write and files_changed > 0:
+            console.print("\n[yellow]Tip: Use --write to apply changes to files[/]")
+    
+    except RateLimitError as e:
+        console.print(f"[red bold]Rate Limit Exceeded[/]")
+        console.print(f"[yellow]{e.message}[/]")
+        sys.exit(2)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()

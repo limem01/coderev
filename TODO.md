@@ -23,7 +23,7 @@
 
 ## Phase 4: Polish (Week 4-5)
 - [ ] Interactive TUI mode
-- [ ] Auto-fix capabilities
+- [x] Auto-fix capabilities
 - [x] Batch review with summary report
 - [ ] Integration tests with real API
 - [ ] PyPI publication
