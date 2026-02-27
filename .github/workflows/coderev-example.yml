@@ -1,0 +1,104 @@
+# Example workflow for using CodeRev GitHub Action
+# Copy this to your repository as .github/workflows/coderev.yml
+
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Required for posting PR comments
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coderev:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better diff analysis
+      
+      - name: Run CodeRev
+        id: coderev
+        uses: khalil/coderev@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          model: 'claude-3-sonnet-20240229'
+          focus: 'bugs,security,performance'
+          fail_on: 'critical'  # Fail CI on critical issues
+          post_review: 'true'
+          max_files: '20'
+          ignore_patterns: '*.test.*,*.spec.*,*.min.js,*.min.css,package-lock.json,yarn.lock'
+      
+      - name: Check Review Results
+        if: always()
+        run: |
+          echo "📊 Code Review Summary"
+          echo "====================="
+          echo "Score: ${{ steps.coderev.outputs.score }}/100"
+          echo "Total Issues: ${{ steps.coderev.outputs.issues_count }}"
+          echo "  Critical: ${{ steps.coderev.outputs.critical_count }}"
+          echo "  High: ${{ steps.coderev.outputs.high_count }}"
+          echo "  Medium: ${{ steps.coderev.outputs.medium_count }}"
+          echo "  Low: ${{ steps.coderev.outputs.low_count }}"
+      
+      # Optional: Add a comment with the score as a badge
+      - name: Add Score Badge Comment
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const score = ${{ steps.coderev.outputs.score }};
+            const issues = ${{ steps.coderev.outputs.issues_count }};
+            const critical = ${{ steps.coderev.outputs.critical_count }};
+            const high = ${{ steps.coderev.outputs.high_count }};
+            
+            let color = 'brightgreen';
+            if (score < 60) color = 'red';
+            else if (score < 70) color = 'orange';
+            else if (score < 80) color = 'yellow';
+            else if (score < 90) color = 'yellowgreen';
+            
+            const badge = `![Code Quality](https://img.shields.io/badge/Code%20Quality-${score}%2F100-${color})`;
+            
+            let summary = `## 🔍 AI Code Review Results\n\n${badge}\n\n`;
+            summary += `| Metric | Value |\n|--------|-------|\n`;
+            summary += `| Score | ${score}/100 |\n`;
+            summary += `| Total Issues | ${issues} |\n`;
+            summary += `| Critical | ${critical} |\n`;
+            summary += `| High | ${high} |\n`;
+            
+            // Find existing comment or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.find(c => 
+              c.user.type === 'Bot' && 
+              c.body.includes('AI Code Review Results')
+            );
+            
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: summary,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary,
+              });
+            }

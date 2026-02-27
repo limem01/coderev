@@ -137,7 +137,106 @@ coderev review app.py --format sarif
 
 ## CI/CD Integration
 
-### GitHub Actions
+### GitHub Action (Marketplace)
+
+The easiest way to use CodeRev in your CI/CD pipeline is via our official GitHub Action:
+
+```yaml
+name: AI Code Review
+on: [pull_request]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run CodeRev
+        uses: khalil/coderev@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          model: 'claude-3-sonnet-20240229'
+          focus: 'bugs,security,performance'
+          fail_on: 'critical'
+          post_review: 'true'
+```
+
+#### Action Inputs
+
+| Input | Description | Required | Default |
+|-------|-------------|----------|---------|
+| `anthropic_api_key` | Anthropic API key for Claude models | No* | - |
+| `openai_api_key` | OpenAI API key for GPT models | No* | - |
+| `github_token` | GitHub token for posting reviews | Yes | `${{ github.token }}` |
+| `model` | Model to use | No | `claude-3-sonnet-20240229` |
+| `focus` | Focus areas (comma-separated) | No | `bugs,security,performance` |
+| `fail_on` | Fail on severity level | No | - |
+| `post_review` | Post review to PR | No | `true` |
+| `max_files` | Max files to review | No | `20` |
+| `ignore_patterns` | Patterns to ignore | No | `*.test.*,*.spec.*` |
+
+*Either `anthropic_api_key` or `openai_api_key` is required.
+
+#### Action Outputs
+
+| Output | Description |
+|--------|-------------|
+| `score` | Code quality score (0-100) |
+| `issues_count` | Total issues found |
+| `critical_count` | Critical issues |
+| `high_count` | High severity issues |
+| `medium_count` | Medium severity issues |
+| `low_count` | Low severity issues |
+| `review_url` | URL to posted review |
+
+#### Advanced Example
+
+```yaml
+name: AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  coderev:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Run CodeRev
+        id: review
+        uses: khalil/coderev@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          focus: 'bugs,security,performance,architecture'
+          fail_on: 'high'
+          max_files: '30'
+          ignore_patterns: '*.test.*,*.spec.*,*.min.js,package-lock.json'
+      
+      - name: Quality Gate
+        if: always()
+        run: |
+          if [ "${{ steps.review.outputs.score }}" -lt 70 ]; then
+            echo "::error::Code quality score is below 70"
+            exit 1
+          fi
+```
+
+### Manual GitHub Actions Setup
+
+If you prefer more control, you can install CodeRev directly:
 
 ```yaml
 name: Code Review

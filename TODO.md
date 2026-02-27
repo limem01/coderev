@@ -12,7 +12,7 @@
 - [ ] Bitbucket PR support
 - [ ] VS Code extension
 - [x] Pre-commit hook package
-- [ ] GitHub Action (published to marketplace)
+- [x] GitHub Action (published to marketplace)
 
 ## Phase 3: Advanced Features (Week 3-4)
 - [x] Custom rule definitions (YAML)

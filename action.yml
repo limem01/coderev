@@ -1,0 +1,78 @@
+name: 'CodeRev AI Code Review'
+description: 'AI-powered code review for pull requests using Claude or GPT-4'
+author: 'Khalil Limem'
+
+branding:
+  icon: 'code'
+  color: 'purple'
+
+inputs:
+  anthropic_api_key:
+    description: 'Anthropic API key for Claude models'
+    required: false
+  openai_api_key:
+    description: 'OpenAI API key for GPT models'
+    required: false
+  github_token:
+    description: 'GitHub token for posting review comments'
+    required: true
+    default: ${{ github.token }}
+  model:
+    description: 'Model to use (claude-3-sonnet-20240229, claude-3-opus-20240229, gpt-4o, etc.)'
+    required: false
+    default: 'claude-3-sonnet-20240229'
+  focus:
+    description: 'Focus areas (comma-separated: bugs,security,performance,style,architecture)'
+    required: false
+    default: 'bugs,security,performance'
+  fail_on:
+    description: 'Fail the workflow if issues of this severity or higher are found (critical,high,medium,low)'
+    required: false
+    default: ''
+  post_review:
+    description: 'Post review comments to the PR'
+    required: false
+    default: 'true'
+  max_files:
+    description: 'Maximum number of files to review (0 for unlimited)'
+    required: false
+    default: '20'
+  ignore_patterns:
+    description: 'File patterns to ignore (comma-separated globs)'
+    required: false
+    default: '*.test.*,*.spec.*,*.min.js,*.min.css'
+  review_event:
+    description: 'Review event type (COMMENT, APPROVE, REQUEST_CHANGES, or auto)'
+    required: false
+    default: 'auto'
+
+outputs:
+  score:
+    description: 'Overall code quality score (0-100)'
+  issues_count:
+    description: 'Total number of issues found'
+  critical_count:
+    description: 'Number of critical issues'
+  high_count:
+    description: 'Number of high severity issues'
+  medium_count:
+    description: 'Number of medium severity issues'
+  low_count:
+    description: 'Number of low severity issues'
+  review_url:
+    description: 'URL to the posted review (if post_review is true)'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+  env:
+    ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+    OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+    GITHUB_TOKEN: ${{ inputs.github_token }}
+    CODEREV_MODEL: ${{ inputs.model }}
+    CODEREV_FOCUS: ${{ inputs.focus }}
+    CODEREV_FAIL_ON: ${{ inputs.fail_on }}
+    CODEREV_POST_REVIEW: ${{ inputs.post_review }}
+    CODEREV_MAX_FILES: ${{ inputs.max_files }}
+    CODEREV_IGNORE_PATTERNS: ${{ inputs.ignore_patterns }}
+    CODEREV_REVIEW_EVENT: ${{ inputs.review_event }}
