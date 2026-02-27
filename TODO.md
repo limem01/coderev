@@ -16,7 +16,7 @@
 
 ## Phase 3: Advanced Features (Week 3-4)
 - [x] Custom rule definitions (YAML)
-- [ ] Team configuration sharing
+- [x] Team configuration sharing
 - [x] Review history and tracking
 - [ ] Diff viewer with annotations
 - [x] Cost estimation before review

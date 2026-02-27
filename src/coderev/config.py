@@ -88,9 +88,15 @@ class Config:
             return self.api_key
     
     @classmethod
-    def load(cls, config_path: Path | None = None) -> Config:
-        """Load configuration from file and environment variables."""
+    def load(cls, config_path: Path | None = None, resolve_extends: bool = True) -> Config:
+        """Load configuration from file and environment variables.
+        
+        Args:
+            config_path: Optional explicit path to config file.
+            resolve_extends: Whether to resolve 'extends' directives (default: True).
+        """
         config_data: dict[str, Any] = {}
+        found_path: Path | None = None
         
         # Search for config file
         search_paths = []
@@ -105,7 +111,19 @@ class Config:
             if path.exists():
                 with open(path) as f:
                     loaded = toml.load(f)
-                    config_data = loaded.get("coderev", loaded)
+                found_path = path
+                
+                # Resolve extends if enabled
+                if resolve_extends:
+                    from coderev.team import resolve_extends as do_resolve_extends, TeamConfigError
+                    try:
+                        loaded = do_resolve_extends(loaded, base_path=path.parent)
+                    except TeamConfigError as e:
+                        # Log warning but continue with local config
+                        import sys
+                        print(f"Warning: Could not resolve team config: {e}", file=sys.stderr)
+                
+                config_data = loaded.get("coderev", loaded)
                 break
         
         # Extract github config

@@ -950,6 +950,190 @@ def history_clear() -> None:
         sys.exit(1)
 
 
+# ============================================================================
+# CONFIG COMMANDS - Team configuration sharing
+# ============================================================================
+
+@main.group()
+def config() -> None:
+    """Manage team and shared configurations."""
+    pass
+
+
+@config.command("show")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json", "toml"]), default="rich")
+@click.option("--resolved/--no-resolved", default=True, help="Show resolved config with extends merged (default: yes)")
+def config_show(output_format: str, resolved: bool) -> None:
+    """Show the current effective configuration.
+    
+    Displays the full configuration with all 'extends' directives resolved
+    and merged. Use --no-resolved to see only the local config.
+    
+    Examples:
+        coderev config show
+        coderev config show --format toml
+        coderev config show --no-resolved
+    """
+    import json as json_module
+    import toml as toml_module
+    
+    try:
+        cfg = Config.load(resolve_extends=resolved)
+        
+        # Build config dict
+        config_dict = {
+            "model": cfg.model,
+            "provider": cfg.provider or "(auto-detect)",
+            "focus": cfg.focus,
+            "ignore_patterns": cfg.ignore_patterns,
+            "max_file_size": cfg.max_file_size,
+            "language_hints": cfg.language_hints,
+        }
+        
+        if output_format == "json":
+            click.echo(json_module.dumps(config_dict, indent=2))
+        elif output_format == "toml":
+            click.echo(toml_module.dumps({"coderev": config_dict}))
+        else:  # rich
+            from rich.table import Table
+            from rich.panel import Panel
+            
+            table = Table(show_header=False, box=None, padding=(0, 2))
+            table.add_column("Setting", style="cyan")
+            table.add_column("Value", style="white")
+            
+            table.add_row("Model", cfg.model)
+            table.add_row("Provider", cfg.get_provider())
+            table.add_row("Focus", ", ".join(cfg.focus))
+            table.add_row("Ignore Patterns", ", ".join(cfg.ignore_patterns) or "(none)")
+            table.add_row("Max File Size", f"{cfg.max_file_size:,} bytes")
+            table.add_row("Language Hints", str(cfg.language_hints))
+            
+            title = "[bold blue]Effective Configuration[/]" if resolved else "[bold blue]Local Configuration[/]"
+            console.print(Panel(table, title=title, border_style="blue"))
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@config.command("sync")
+@click.argument("extends_ref")
+@click.option("--output", "-o", type=click.Path(), help="Write synced config to this path")
+@click.option("--force", "-f", is_flag=True, help="Force re-download even if cached")
+def config_sync(extends_ref: str, output: Optional[str], force: bool) -> None:
+    """Sync (download) a team configuration.
+    
+    Downloads and caches a remote team configuration. Supports:
+    - URLs: https://example.com/team-config.toml
+    - GitHub: gh:owner/repo/path.toml or gh:owner/repo/path.toml@branch
+    - Local: ./path/to/config.toml
+    
+    Examples:
+        coderev config sync gh:myorg/configs/coderev.toml
+        coderev config sync https://example.com/team.toml
+        coderev config sync gh:myorg/configs/coderev.toml@develop
+        coderev config sync gh:myorg/configs/coderev.toml -o .coderev-team.toml
+    """
+    from coderev.team import sync_team_config, TeamConfigError
+    
+    try:
+        output_path = Path(output) if output else None
+        result_path = sync_team_config(extends_ref, output_path, force)
+        
+        console.print(f"[green]✓ Config synced to: {result_path}[/]")
+        
+        if not output:
+            console.print("\n[dim]To use this config, add to your .coderev.toml:[/]")
+            console.print(f'[cyan]extends = "{extends_ref}"[/]')
+    
+    except TeamConfigError as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@config.command("cache")
+@click.option("--clear", is_flag=True, help="Clear all cached configs")
+def config_cache(clear: bool) -> None:
+    """Manage the team config cache.
+    
+    Shows cached team configurations or clears the cache.
+    
+    Examples:
+        coderev config cache           # List cached configs
+        coderev config cache --clear   # Clear all cached configs
+    """
+    from coderev.team import list_cached_configs, clear_config_cache
+    from datetime import datetime
+    
+    try:
+        if clear:
+            count = clear_config_cache()
+            console.print(f"[yellow]Cleared {count} cached config(s)[/]")
+            return
+        
+        configs = list_cached_configs()
+        
+        if not configs:
+            console.print("[dim]No cached team configurations[/]")
+            return
+        
+        from rich.table import Table
+        
+        table = Table(title="Cached Team Configurations")
+        table.add_column("Name", style="cyan")
+        table.add_column("Size", justify="right")
+        table.add_column("Last Modified", style="dim")
+        
+        for cfg in configs:
+            modified = datetime.fromtimestamp(cfg["modified"]).strftime("%Y-%m-%d %H:%M")
+            size = f"{cfg['size']:,} B"
+            table.add_row(cfg["name"], size, modified)
+        
+        console.print(table)
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@config.command("create-team")
+@click.argument("output_path", type=click.Path(), default="coderev-team.toml")
+def config_create_team(output_path: str) -> None:
+    """Create a template team configuration file.
+    
+    Generates a template TOML file that can be shared with your team.
+    Upload it to GitHub or a web server and have team members extend it.
+    
+    Examples:
+        coderev config create-team
+        coderev config create-team configs/team.toml
+    """
+    from coderev.team import create_team_config_template
+    
+    try:
+        path = Path(output_path)
+        
+        if path.exists():
+            if not click.confirm(f"{path} already exists. Overwrite?"):
+                return
+        
+        create_team_config_template(path)
+        console.print(f"[green]✓ Created team config template: {path}[/]")
+        console.print("\n[dim]Next steps:[/]")
+        console.print("  1. Edit the template with your team's settings")
+        console.print("  2. Upload to GitHub or a web server")
+        console.print("  3. Team members add to their .coderev.toml:")
+        console.print('     [cyan]extends = "gh:yourorg/configs/coderev-team.toml"[/]')
+    
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
 @main.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
