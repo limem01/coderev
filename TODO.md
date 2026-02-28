@@ -22,7 +22,7 @@
 - [x] Cost estimation before review
 
 ## Phase 4: Polish (Week 4-5)
-- [ ] Interactive TUI mode
+- [x] Interactive TUI mode
 - [x] Auto-fix capabilities
 - [x] Batch review with summary report
 - [ ] Integration tests with real API

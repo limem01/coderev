@@ -1299,5 +1299,40 @@ def fix(
         sys.exit(1)
 
 
+@main.command()
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--simple", "-s", is_flag=True, help="Use simple input mode (for non-TTY terminals)")
+def tui(path: str, simple: bool) -> None:
+    """Launch interactive TUI mode.
+    
+    Opens an interactive terminal interface for browsing files,
+    selecting them for review, and navigating through results.
+    
+    The TUI provides keyboard-driven navigation:
+    - j/k or arrows: navigate
+    - Space: select files
+    - r: start review
+    - Enter: open directory or view issue details
+    - q: quit
+    
+    Use --simple for terminals without raw mode support.
+    
+    Examples:
+        coderev tui
+        coderev tui ./src
+        coderev tui --simple
+    """
+    from coderev.tui import run_tui
+    
+    try:
+        config = Config.load()
+        run_tui(config=config, start_path=path, simple_mode=simple)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Goodbye![/]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     main()
