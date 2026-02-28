@@ -25,7 +25,7 @@
 - [x] Interactive TUI mode
 - [x] Auto-fix capabilities
 - [x] Batch review with summary report
-- [ ] Integration tests with real API
+- [x] Integration tests with real API
 - [ ] PyPI publication
 
 ## Bugs to Fix

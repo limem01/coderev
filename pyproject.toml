@@ -84,6 +84,9 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: mark test as integration test (requires --integration flag and API keys)",
+]
 
 [tool.coverage.run]
 source = ["src/coderev"]
