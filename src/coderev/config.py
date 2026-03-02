@@ -67,6 +67,21 @@ class GitLabConfig:
 
 
 @dataclass
+class BitbucketConfig:
+    """Bitbucket-specific configuration."""
+    
+    username: str | None = None
+    app_password: str | None = None
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> BitbucketConfig:
+        return cls(
+            username=data.get("username") or os.environ.get("BITBUCKET_USERNAME"),
+            app_password=data.get("app_password") or os.environ.get("BITBUCKET_APP_PASSWORD"),
+        )
+
+
+@dataclass
 class Config:
     """Main configuration for CodeRev."""
     
@@ -80,6 +95,7 @@ class Config:
     language_hints: bool = True
     github: GitHubConfig = field(default_factory=GitHubConfig)
     gitlab: GitLabConfig = field(default_factory=GitLabConfig)
+    bitbucket: BitbucketConfig = field(default_factory=BitbucketConfig)
     
     def get_provider(self) -> str:
         """Get the provider to use, auto-detecting from model if not specified."""
@@ -142,9 +158,10 @@ class Config:
                 config_data = loaded.get("coderev", loaded)
                 break
         
-        # Extract github and gitlab config
+        # Extract github, gitlab, and bitbucket config
         github_data = config_data.pop("github", {})
         gitlab_data = config_data.pop("gitlab", {})
+        bitbucket_data = config_data.pop("bitbucket", {})
         
         # Build config with env var fallbacks
         # Anthropic API key (backwards compatible)
@@ -169,6 +186,7 @@ class Config:
             language_hints=config_data.get("language_hints", True),
             github=GitHubConfig.from_dict(github_data),
             gitlab=GitLabConfig.from_dict(gitlab_data),
+            bitbucket=BitbucketConfig.from_dict(bitbucket_data),
         )
     
     def validate(self) -> list[str]:
