@@ -8,7 +8,7 @@
 - [x] Add line-by-line inline suggestions
 
 ## Phase 2: Integrations (Week 2-3)
-- [ ] GitLab MR support
+- [x] GitLab MR support
 - [ ] Bitbucket PR support
 - [ ] VS Code extension
 - [x] Pre-commit hook package

@@ -52,6 +52,21 @@ class GitHubConfig:
 
 
 @dataclass
+class GitLabConfig:
+    """GitLab-specific configuration."""
+    
+    token: str | None = None
+    api_base: str | None = None  # For self-hosted GitLab instances
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> GitLabConfig:
+        return cls(
+            token=data.get("token") or os.environ.get("GITLAB_TOKEN"),
+            api_base=data.get("api_base") or os.environ.get("GITLAB_API_BASE"),
+        )
+
+
+@dataclass
 class Config:
     """Main configuration for CodeRev."""
     
@@ -64,6 +79,7 @@ class Config:
     max_file_size: int = DEFAULT_MAX_FILE_SIZE
     language_hints: bool = True
     github: GitHubConfig = field(default_factory=GitHubConfig)
+    gitlab: GitLabConfig = field(default_factory=GitLabConfig)
     
     def get_provider(self) -> str:
         """Get the provider to use, auto-detecting from model if not specified."""
@@ -126,8 +142,9 @@ class Config:
                 config_data = loaded.get("coderev", loaded)
                 break
         
-        # Extract github config
+        # Extract github and gitlab config
         github_data = config_data.pop("github", {})
+        gitlab_data = config_data.pop("gitlab", {})
         
         # Build config with env var fallbacks
         # Anthropic API key (backwards compatible)
@@ -151,6 +168,7 @@ class Config:
             max_file_size=config_data.get("max_file_size", DEFAULT_MAX_FILE_SIZE),
             language_hints=config_data.get("language_hints", True),
             github=GitHubConfig.from_dict(github_data),
+            gitlab=GitLabConfig.from_dict(gitlab_data),
         )
     
     def validate(self) -> list[str]:

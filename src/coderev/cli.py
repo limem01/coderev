@@ -453,6 +453,160 @@ def pr(
 
 
 @main.command()
+@click.argument("mr_ref")
+@click.option("--focus", "-f", multiple=True, help="Focus areas")
+@click.option("--format", "output_format", type=click.Choice(["rich", "json", "markdown"]), default="rich")
+@click.option("--post-comments", is_flag=True, help="Post review comments to MR")
+def mr(
+    mr_ref: str,
+    focus: tuple[str, ...],
+    output_format: str,
+    post_comments: bool,
+) -> None:
+    """Review a GitLab merge request.
+    
+    Supports full URLs or just the MR number (when in a GitLab repo).
+    
+    Examples:
+        coderev mr https://gitlab.com/owner/repo/-/merge_requests/123
+        coderev mr 123
+        coderev mr 123 --post-comments
+    """
+    from coderev.gitlab import GitLabClient, detect_language_from_filename
+    from coderev.prompts import build_pr_prompt
+    
+    try:
+        config = Config.load()
+        errors = config.validate()
+        if errors:
+            for error in errors:
+                console.print(f"[red]Config error: {error}[/]")
+            sys.exit(1)
+        
+        # Parse MR reference
+        if mr_ref.startswith(("http://", "https://")):
+            project_path, mr_iid = GitLabClient.parse_mr_url(mr_ref)
+        else:
+            # Assume local repo and MR number
+            import subprocess
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise click.ClickException("Could not determine repository from git remote")
+            
+            remote_url = result.stdout.strip()
+            # Parse gitlab.com/owner/repo from various URL formats
+            import re
+            # Handle SSH: git@gitlab.com:owner/repo.git
+            # Handle HTTPS: https://gitlab.com/owner/repo.git
+            match = re.search(r"gitlab[^/]*[:/](.+?)(?:\.git)?$", remote_url)
+            if not match:
+                raise click.ClickException(f"Could not parse GitLab repo from: {remote_url}")
+            
+            project_path = match.group(1)
+            mr_iid = int(mr_ref)
+        
+        console.print(f"[bold blue]Fetching MR !{mr_iid} from {project_path}...[/]")
+        
+        with GitLabClient(config=config) as gl:
+            mr_data = gl.get_merge_request(project_path, mr_iid)
+        
+        console.print(f"[bold]MR: {mr_data.title}[/]")
+        console.print(f"[dim]{mr_data.additions} additions, {mr_data.deletions} deletions across {len(mr_data.files)} files[/]")
+        
+        # Prepare files for review
+        files_for_review = []
+        for file_info in mr_data.files:
+            if file_info.get("diff"):  # Only include files with diffs
+                filename = file_info.get("new_path") or file_info.get("old_path")
+                files_for_review.append({
+                    "filename": filename,
+                    "patch": file_info["diff"],
+                    "language": detect_language_from_filename(filename),
+                })
+        
+        if not files_for_review:
+            console.print("[yellow]No reviewable file changes found[/]")
+            return
+        
+        # Build prompt and review
+        reviewer = CodeReviewer(config=config)
+        focus_list = list(focus) if focus else None
+        
+        prompt = build_pr_prompt(
+            mr_data.title,
+            mr_data.description,
+            files_for_review,
+            focus_list,
+        )
+        
+        console.print("[dim]Analyzing changes...[/]")
+        response = reviewer._call_api(prompt)
+        
+        from coderev.reviewer import ReviewResult, Issue
+        
+        issues = [Issue.from_dict(i) for i in response.get("issues", [])]
+        result = ReviewResult(
+            summary=response.get("summary", "MR review completed"),
+            issues=issues,
+            score=response.get("score", 0),
+            positive=response.get("positive", []),
+            verdict=response.get("verdict"),
+            raw_response=response,
+        )
+        
+        if output_format == "rich":
+            formatter = RichFormatter(console)
+            formatter.print_result(result, f"MR !{mr_iid}")
+            
+            if result.verdict:
+                verdict_style = {
+                    "approve": "green bold",
+                    "request_changes": "red bold",
+                    "comment": "yellow",
+                }.get(result.verdict, "white")
+                console.print(f"\n[{verdict_style}]Verdict: {result.verdict.upper()}[/]")
+        else:
+            formatter = get_formatter(output_format)
+            click.echo(formatter.format(result))
+        
+        # Post comments if requested
+        if post_comments:
+            console.print("\n[bold]Posting review to GitLab...[/]")
+            with GitLabClient(config=config) as gl:
+                # Build review body
+                review_body = f"## AI Code Review\n\n{result.summary}\n\n**Score:** {result.score}/100"
+                
+                if result.issues:
+                    review_body += "\n\n### Issues Found\n\n"
+                    for issue in result.issues:
+                        severity_emoji = {
+                            "critical": "🔴",
+                            "high": "🟠",
+                            "medium": "🟡",
+                            "low": "🔵",
+                        }.get(issue.severity.value, "⚪")
+                        review_body += f"- {severity_emoji} **{issue.severity.value.upper()}**: {issue.message}\n"
+                
+                if result.verdict:
+                    review_body += f"\n**Verdict:** {result.verdict.upper()}"
+                
+                gl.post_note(mr_data.project_id, mr_iid, review_body)
+                console.print("[green]Review posted successfully![/]")
+    
+    except RateLimitError as e:
+        console.print(f"[red bold]Rate Limit Exceeded[/]")
+        console.print(f"[yellow]{e.message}[/]")
+        sys.exit(2)
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        sys.exit(1)
+
+
+@main.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
 @click.option("--recursive", "-r", is_flag=True, help="Recursively review directories")
