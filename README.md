@@ -348,6 +348,17 @@ For this to work, you need to configure [trusted publishing](https://docs.pypi.o
    - Workflow name: `publish.yml`
    - Environment name: `pypi` (and `testpypi` for TestPyPI)
 
+## Comparison with Other Tools
+
+Not sure if CodeRev is right for you? Check our detailed [comparison with other AI code review tools](docs/COMPARISON.md) including:
+
+- **Codium PR-Agent** - Open source PR-focused tool
+- **CodeRabbit** - Commercial SaaS solution  
+- **Amazon CodeGuru** - AWS ML-powered reviews
+- **Sourcery** - Python-focused AI assistant
+
+**TL;DR:** Choose CodeRev for CLI-first workflows, self-hosting, custom rules, and transparent pricing.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.

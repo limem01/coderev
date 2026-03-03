@@ -37,4 +37,4 @@
 - [ ] Add GIF demos to README
 - [ ] Write detailed API docs
 - [ ] Add more code examples
-- [ ] Create comparison with other tools
+- [x] Create comparison with other tools
