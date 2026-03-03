@@ -1,5 +1,10 @@
 # CodeRev
 
+[![PyPI version](https://badge.fury.io/py/coderev.svg)](https://badge.fury.io/py/coderev)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/limem01/coderev/actions/workflows/ci.yml/badge.svg)](https://github.com/limem01/coderev/actions/workflows/ci.yml)
+
 An intelligent CLI tool that uses AI to review your code, analyze pull requests, and suggest improvements.
 
 ## Features
@@ -13,16 +18,30 @@ An intelligent CLI tool that uses AI to review your code, analyze pull requests,
 
 ## Installation
 
+### From PyPI (Recommended)
+
 ```bash
 pip install coderev
 ```
 
-Or install from source:
+With OpenAI support:
 
 ```bash
-git clone https://github.com/yourusername/coderev.git
+pip install coderev[openai]
+```
+
+With all optional dependencies:
+
+```bash
+pip install coderev[all]
+```
+
+### From Source
+
+```bash
+git clone https://github.com/limem01/coderev.git
 cd coderev
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -156,7 +175,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Run CodeRev
-        uses: khalil/coderev@v1
+        uses: limem01/coderev@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -216,7 +235,7 @@ jobs:
       
       - name: Run CodeRev
         id: review
-        uses: khalil/coderev@v1
+        uses: limem01/coderev@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -297,7 +316,7 @@ for issue in result.issues:
 
 ```bash
 # Clone and install dev dependencies
-git clone https://github.com/yourusername/coderev.git
+git clone https://github.com/limem01/coderev.git
 cd coderev
 pip install -e ".[dev]"
 
@@ -310,6 +329,24 @@ ruff check .
 # Run type checking
 mypy src/
 ```
+
+## Publishing
+
+CodeRev is automatically published to PyPI when a new GitHub release is created:
+
+1. Update the version in `pyproject.toml`
+2. Commit and push to main
+3. Create a new release on GitHub
+4. The CI will automatically build and publish to PyPI
+
+For this to work, you need to configure [trusted publishing](https://docs.pypi.org/trusted-publishers/) on PyPI:
+
+1. Go to PyPI → Your projects → coderev → Publishing
+2. Add a new trusted publisher with:
+   - Owner: `limem01`
+   - Repository: `coderev`
+   - Workflow name: `publish.yml`
+   - Environment name: `pypi` (and `testpypi` for TestPyPI)
 
 ## License
 

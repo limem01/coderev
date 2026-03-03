@@ -25,7 +25,7 @@ jobs:
       
       - name: Run CodeRev
         id: coderev
-        uses: khalil/coderev@v1
+        uses: limem01/coderev@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}

@@ -59,10 +59,11 @@ coderev = "coderev.cli:main"
 coderev-precommit = "coderev.precommit:main"
 
 [project.urls]
-Homepage = "https://github.com/khalil/coderev"
-Documentation = "https://github.com/khalil/coderev#readme"
-Repository = "https://github.com/khalil/coderev"
-Issues = "https://github.com/khalil/coderev/issues"
+Homepage = "https://github.com/limem01/coderev"
+Documentation = "https://github.com/limem01/coderev#readme"
+Repository = "https://github.com/limem01/coderev"
+Issues = "https://github.com/limem01/coderev/issues"
+Changelog = "https://github.com/limem01/coderev/releases"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/coderev"]

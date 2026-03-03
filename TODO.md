@@ -26,7 +26,7 @@
 - [x] Auto-fix capabilities
 - [x] Batch review with summary report
 - [x] Integration tests with real API
-- [ ] PyPI publication
+- [x] PyPI publication
 
 ## Bugs to Fix
 - [x] Handle binary files gracefully
