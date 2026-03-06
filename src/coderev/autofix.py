@@ -410,18 +410,18 @@ class AutoFixer:
 
 def format_fix_diff(result: FixResult, use_color: bool = True) -> str:
     """Format a fix result as a colored diff string.
-    
+
     Args:
         result: The fix result to format.
         use_color: Whether to include ANSI color codes.
-        
+
     Returns:
         Formatted diff string.
     """
     if not result.has_changes:
         return "No changes made."
-    
-    lines = []
+
+    lines: list[str] = []
     for line in result.diff_lines:
         if use_color:
             if line.startswith('+') and not line.startswith('+++'):
@@ -434,8 +434,119 @@ def format_fix_diff(result: FixResult, use_color: bool = True) -> str:
                 lines.append(line)
         else:
             lines.append(line)
-    
+
     return ''.join(lines)
+
+
+def _parse_unified_diff_hunk_header(header: str) -> tuple[int, int, int, int] | None:
+    """Parse a unified diff hunk header.
+
+    Example header: "@@ -3,7 +3,8 @@ optional context"
+
+    Returns:
+        (old_start, old_count, new_start, new_count) or None if not a hunk.
+    """
+    if not header.startswith('@@'):
+        return None
+
+    # We only need the "-a,b +c,d" part.
+    try:
+        # Split like: ['@@', '-3,7', '+3,8', '@@', 'optional', ...]
+        parts = header.split()
+        old_part = parts[1]  # '-3,7' or '-3'
+        new_part = parts[2]  # '+3,8' or '+3'
+
+        def _parse_range(part: str) -> tuple[int, int]:
+            part = part[1:]  # strip +/-
+            if ',' in part:
+                start_s, count_s = part.split(',', 1)
+                return int(start_s), int(count_s)
+            return int(part), 1
+
+        old_start, old_count = _parse_range(old_part)
+        new_start, new_count = _parse_range(new_part)
+        return old_start, old_count, new_start, new_count
+    except Exception:
+        return None
+
+
+def format_fix_diff_annotated(result: FixResult, use_color: bool = True) -> str:
+    """Format a fix diff with inline annotations for applied fixes.
+
+    This is a lightweight "diff viewer with annotations": it renders a
+    unified diff (like :func:`format_fix_diff`) but inserts comment-style
+    lines before each hunk describing which fixes were applied in that area.
+
+    Notes:
+        The annotations are for *display only*; they are not meant to be
+        applied back as a patch.
+
+    Args:
+        result: The FixResult to format.
+        use_color: Whether to include ANSI color codes.
+
+    Returns:
+        A formatted diff string with annotations.
+    """
+    if not result.has_changes:
+        return "No changes made."
+
+    # Pre-sort so output is deterministic.
+    fixes = sorted(result.applied_fixes, key=lambda s: (s.start_line, -s.severity.weight))
+    emitted_fix_ids: set[int] = set()
+
+    out_lines: list[str] = []
+
+    for line in result.diff_lines:
+        hunk = _parse_unified_diff_hunk_header(line)
+        if hunk:
+            old_start, old_count, _new_start, _new_count = hunk
+            old_end = old_start + max(old_count, 0) - 1
+
+            # Select fixes that overlap this hunk in the original file.
+            hunk_fixes = []
+            for fix in fixes:
+                if id(fix) in emitted_fix_ids:
+                    continue
+                # Overlap check against the *original* line range.
+                if old_count == 0:
+                    continue
+                if fix.end_line < old_start or fix.start_line > old_end:
+                    continue
+                hunk_fixes.append(fix)
+
+            if hunk_fixes:
+                for fix in hunk_fixes:
+                    emitted_fix_ids.add(id(fix))
+                    annotation = f"# FIX {fix.line_range} [{fix.severity.value}] {fix.explanation}\n"
+                    if use_color:
+                        annotation = f"\033[35m{annotation}\033[0m"  # Magenta
+                    out_lines.append(annotation)
+
+        # Add the diff line itself, colorized like format_fix_diff.
+        if use_color:
+            if line.startswith('+') and not line.startswith('+++'):
+                out_lines.append(f"\033[32m{line}\033[0m")
+            elif line.startswith('-') and not line.startswith('---'):
+                out_lines.append(f"\033[31m{line}\033[0m")
+            elif line.startswith('@@'):
+                out_lines.append(f"\033[36m{line}\033[0m")
+            else:
+                out_lines.append(line)
+        else:
+            out_lines.append(line)
+
+    # If we couldn't associate some fixes to a hunk (edge cases), append them.
+    remaining = [f for f in fixes if id(f) not in emitted_fix_ids]
+    if remaining:
+        out_lines.append("\n")
+        trailer = "# Applied fixes (unmapped to hunks)\n"
+        out_lines.append(f"\033[35m{trailer}\033[0m" if use_color else trailer)
+        for fix in remaining:
+            trailer_line = f"# FIX {fix.line_range} [{fix.severity.value}] {fix.explanation}\n"
+            out_lines.append(f"\033[35m{trailer_line}\033[0m" if use_color else trailer_line)
+
+    return ''.join(out_lines)
 
 
 def format_fix_summary(result: FixResult) -> str:

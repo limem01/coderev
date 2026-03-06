@@ -18,7 +18,7 @@
 - [x] Custom rule definitions (YAML)
 - [x] Team configuration sharing
 - [x] Review history and tracking
-- [ ] Diff viewer with annotations
+- [x] Diff viewer with annotations
 - [x] Cost estimation before review
 
 ## Phase 4: Polish (Week 4-5)

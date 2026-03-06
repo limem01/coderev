@@ -4,7 +4,13 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from coderev.autofix import AutoFixer, FixResult, format_fix_diff, format_fix_summary
+from coderev.autofix import (
+    AutoFixer,
+    FixResult,
+    format_fix_diff,
+    format_fix_diff_annotated,
+    format_fix_summary,
+)
 from coderev.reviewer import (
     InlineSuggestion,
     ReviewResult,
@@ -444,7 +450,7 @@ class TestFormatFunctions:
             severity=Severity.LOW,
             category=Category.STYLE,
         )
-        
+
         result = FixResult(
             file_path="test.py",
             original_code="x = 1\n",
@@ -452,11 +458,37 @@ class TestFormatFunctions:
             applied_fixes=[suggestion],
             skipped_fixes=[],
         )
-        
+
         output = format_fix_summary(result)
         assert "test.py" in output
         assert "Fixes applied: 1" in output
         assert "Add type hint" in output
+
+    def test_format_fix_diff_annotated_includes_fix_note_before_hunk(self):
+        """Annotated diff should include per-hunk notes for applied fixes."""
+        suggestion = InlineSuggestion(
+            start_line=1,
+            end_line=1,
+            original_code="x = 1",
+            suggested_code="x: int = 1",
+            explanation="Add type hint",
+            severity=Severity.LOW,
+            category=Category.STYLE,
+        )
+
+        result = FixResult(
+            file_path="test.py",
+            original_code="x = 1\n",
+            fixed_code="x: int = 1\n",
+            applied_fixes=[suggestion],
+            skipped_fixes=[],
+        )
+
+        output = format_fix_diff_annotated(result, use_color=False)
+
+        assert "# FIX L1 [low] Add type hint" in output
+        # Ensure it is shown before the hunk header
+        assert output.index("# FIX L1") < output.index("@@")
 
 
 class TestAutoFixerIntegration:
