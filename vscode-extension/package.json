@@ -1,0 +1,146 @@
+{
+  "name": "coderev",
+  "displayName": "CodeRev - AI Code Review",
+  "description": "AI-powered code review using CodeRev CLI. Review files, diffs, and PRs directly from VS Code.",
+  "version": "0.1.0",
+  "publisher": "limem01",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/limem01/coderev"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "code review",
+    "AI",
+    "linting",
+    "code quality",
+    "claude",
+    "gpt",
+    "llm"
+  ],
+  "icon": "images/icon.png",
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "coderev.reviewFile",
+        "title": "CodeRev: Review Current File"
+      },
+      {
+        "command": "coderev.reviewSelection",
+        "title": "CodeRev: Review Selection"
+      },
+      {
+        "command": "coderev.reviewDiff",
+        "title": "CodeRev: Review Git Diff"
+      },
+      {
+        "command": "coderev.reviewStagedDiff",
+        "title": "CodeRev: Review Staged Changes"
+      },
+      {
+        "command": "coderev.estimateCost",
+        "title": "CodeRev: Estimate Review Cost"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "coderev.reviewFile",
+          "group": "coderev@1"
+        },
+        {
+          "command": "coderev.reviewSelection",
+          "group": "coderev@2",
+          "when": "editorHasSelection"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "coderev.reviewFile",
+          "group": "coderev@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CodeRev",
+      "properties": {
+        "coderev.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python interpreter with coderev installed"
+        },
+        "coderev.cliPath": {
+          "type": "string",
+          "default": "coderev",
+          "description": "Path to the coderev CLI executable"
+        },
+        "coderev.defaultFocus": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "bugs",
+              "security",
+              "performance",
+              "style",
+              "architecture"
+            ]
+          },
+          "default": [],
+          "description": "Default focus areas for reviews"
+        },
+        "coderev.autoReviewOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically review files on save"
+        },
+        "coderev.showInlineAnnotations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show review issues as inline annotations in the editor"
+        },
+        "coderev.severityFilter": {
+          "type": "string",
+          "enum": [
+            "all",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "default": "all",
+          "description": "Minimum severity level to display"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.18.0",
+    "@typescript-eslint/parser": "^6.18.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^2.22.0",
+    "eslint": "^8.56.0",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.3"
+  }
+}

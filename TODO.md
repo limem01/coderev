@@ -10,7 +10,7 @@
 ## Phase 2: Integrations (Week 2-3)
 - [x] GitLab MR support
 - [x] Bitbucket PR support
-- [ ] VS Code extension
+- [x] VS Code extension
 - [x] Pre-commit hook package
 - [x] GitHub Action (published to marketplace)
 
