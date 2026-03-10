@@ -35,6 +35,6 @@
 
 ## Documentation
 - [ ] Add GIF demos to README
-- [ ] Write detailed API docs
+- [x] Write detailed API docs
 - [ ] Add more code examples
 - [x] Create comparison with other tools
