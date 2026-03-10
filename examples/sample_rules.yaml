@@ -1,0 +1,61 @@
+# Sample custom rules for CodeRev
+# Place as .coderev-rules.yaml in your project root
+
+rules:
+  - id: no-hardcoded-urls
+    name: No hardcoded URLs
+    description: >
+      URLs should be loaded from configuration or environment variables,
+      not hardcoded in source code.
+    severity: medium
+    category: architecture
+    patterns:
+      - "http://"
+      - "https://"
+    languages: [python, javascript, typescript]
+
+  - id: require-type-hints
+    name: Require type hints
+    description: >
+      All public function parameters and return types should have
+      type annotations for better maintainability and IDE support.
+    severity: low
+    category: style
+    languages: [python]
+
+  - id: no-wildcard-imports
+    name: No wildcard imports
+    description: >
+      Wildcard imports (from module import *) pollute the namespace
+      and make it unclear where names come from.
+    severity: medium
+    category: style
+    pattern: "from * import *"
+    languages: [python]
+
+  - id: no-console-log
+    name: No console.log in production
+    description: >
+      Remove console.log statements before merging. Use a proper
+      logging library instead.
+    severity: medium
+    category: style
+    patterns:
+      - "console.log("
+      - "console.debug("
+      - "console.warn("
+    languages: [javascript, typescript]
+
+  - id: sql-injection
+    name: SQL injection prevention
+    description: >
+      Never concatenate user input into SQL queries. Use parameterized
+      queries or an ORM instead.
+    severity: critical
+    category: security
+    patterns:
+      - "f\"SELECT"
+      - "f'SELECT"
+      - '+ "SELECT'
+      - "+ 'SELECT"
+      - ".format("

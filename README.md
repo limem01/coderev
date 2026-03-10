@@ -312,6 +312,17 @@ for issue in result.issues:
     print(f"[{issue.severity}] Line {issue.line}: {issue.message}")
 ```
 
+## Examples
+
+The [examples/](examples/) directory contains practical code samples:
+
+- **[basic_review.py](examples/basic_review.py)** — Review code strings and files, handle results
+- **[async_parallel.py](examples/async_parallel.py)** — Concurrent multi-file reviews
+- **[custom_rules.py](examples/custom_rules.py)** — Define rules in Python or YAML
+- **[cost_estimation.py](examples/cost_estimation.py)** — Estimate API costs before reviewing
+- **[review_history.py](examples/review_history.py)** — Track and analyze quality trends
+- **[ci_integration.py](examples/ci_integration.py)** — Quality gates for CI/CD pipelines
+
 ## Development
 
 ```bash
