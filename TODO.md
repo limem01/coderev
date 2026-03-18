@@ -34,7 +34,7 @@
 - [x] Unicode handling in diffs
 
 ## Documentation
-- [ ] Add GIF demos to README
+- [x] Add GIF demos to README
 - [x] Write detailed API docs
 - [x] Add more code examples
 - [x] Create comparison with other tools

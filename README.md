@@ -66,6 +66,10 @@ coderev review app.py --focus security
 coderev review app.py --format json
 ```
 
+## GIF Demos
+
+![CodeRev CLI demo](docs/gifs/coderev-cli-demo.gif)
+
 ## Configuration
 
 Create a `.coderev.toml` in your project root or home directory:
