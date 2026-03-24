@@ -32,6 +32,7 @@
 - [x] Handle binary files gracefully
 - [x] Better error messages for rate limits
 - [x] Unicode handling in diffs
+- [x] Normalize path separators when applying .coderevignore (Windows compatibility)
 
 ## Documentation
 - [x] Add GIF demos to README

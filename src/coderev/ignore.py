@@ -92,19 +92,36 @@ class CodeRevIgnore:
         
         return patterns
     
+    def _normalize_path(self, path: Path | str) -> str:
+        """Normalize paths so ignore patterns behave consistently across OSes.
+
+        On Windows, file paths often contain backslashes, while ignore patterns
+        typically use forward slashes. We normalize to a POSIX-style string.
+        """
+        return str(path).replace("\\", "/")
+
     def should_ignore(self, path: Path | str) -> bool:
         """Check if a path should be ignored."""
-        path_str = str(path)
-        
+        path_str = self._normalize_path(path)
+        # Make directory-segment checks robust by ensuring separators at ends.
+        path_str_padded = f"/{path_str.strip('/')}/"
+
         all_patterns = self.patterns.copy()
         if self._include_defaults:
             all_patterns.extend(DEFAULT_IGNORE_PATTERNS)
-        
+
         for pattern in all_patterns:
+            # Normalize pattern too (users may copy Windows paths into ignore file)
+            pattern = pattern.replace("\\", "/")
+
             # Handle directory patterns (ending with /)
             if pattern.endswith("/"):
                 dir_pattern = pattern.rstrip("/")
-                if dir_pattern in path_str or fnmatch.fnmatch(path_str, f"*/{dir_pattern}/*"):
+                # Match path segments (e.g. /node_modules/ anywhere in the path)
+                if f"/{dir_pattern}/" in path_str_padded:
+                    return True
+                # Fallback glob matching
+                if fnmatch.fnmatch(path_str, f"*/{dir_pattern}/*"):
                     return True
                 if fnmatch.fnmatch(path_str, f"{dir_pattern}/*"):
                     return True
@@ -114,7 +131,7 @@ class CodeRevIgnore:
                     return True
                 if fnmatch.fnmatch(Path(path_str).name, pattern):
                     return True
-        
+
         return False
     
     def filter_paths(self, paths: list[Path]) -> Iterator[Path]:

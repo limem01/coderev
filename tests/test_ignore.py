@@ -18,6 +18,9 @@ class TestCodeRevIgnore:
         ignore = CodeRevIgnore()
         assert ignore.should_ignore("node_modules/package/index.js") is True
         assert ignore.should_ignore("src/node_modules/test.js") is True
+        # Windows-style separators should still match
+        assert ignore.should_ignore(r"node_modules\\package\\index.js") is True
+        assert ignore.should_ignore(r"src\\node_modules\\test.js") is True
     
     def test_ignore_pycache(self):
         ignore = CodeRevIgnore()
@@ -44,6 +47,7 @@ class TestCodeRevIgnore:
         ignore = CodeRevIgnore(patterns=["*.test.py", "fixtures/"])
         assert ignore.should_ignore("test_main.test.py") is True
         assert ignore.should_ignore("fixtures/data.json") is True
+        assert ignore.should_ignore(r"fixtures\\data.json") is True
         assert ignore.should_ignore("src/main.py") is False
     
     def test_add_pattern(self):
