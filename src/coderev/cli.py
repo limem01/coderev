@@ -196,6 +196,7 @@ def review(
         else:
             # Sequential processing for single file or when parallel is disabled
             reviewer = CodeReviewer(config=config)
+            results = {}
             
             if output_format == "rich":
                 formatter = RichFormatter(console)
@@ -204,6 +205,7 @@ def review(
                     console.print(f"\n[bold blue]Reviewing {file_path}...[/]")
                     try:
                         result = reviewer.review_file(file_path, focus=focus_list)
+                        results[str(file_path)] = result
                         formatter.print_result(result, str(file_path))
                     except Exception as e:
                         console.print(f"[red]Error reviewing {file_path}: {e}[/]")
@@ -220,14 +222,12 @@ def review(
                 
                 click.echo(output)
             
-            # Check fail condition
+            # Check fail condition (without re-reviewing files)
             if fail_on:
-                from coderev.reviewer import Severity
                 severity_order = ["low", "medium", "high", "critical"]
                 min_severity_idx = severity_order.index(fail_on)
                 
-                for file_path in files:
-                    result = reviewer.review_file(file_path, focus=focus_list)
+                for result in results.values():
                     for issue in result.issues:
                         issue_idx = severity_order.index(issue.severity.value)
                         if issue_idx >= min_severity_idx:

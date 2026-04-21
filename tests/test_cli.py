@@ -113,7 +113,56 @@ class TestCLI:
             
             result = runner.invoke(main, ["review", "test.py"])
             assert result.exit_code == 0
-    
+
+    @patch("coderev.cli.CodeReviewer")
+    @patch("coderev.cli.Config")
+    def test_review_fail_on_does_not_rereview_in_sequential_mode(
+        self, mock_config_cls, mock_reviewer_cls, runner, tmp_path
+    ):
+        """Regression test: --fail-on should not trigger duplicate API calls.
+
+        Previously, sequential mode would call review_file once for printing
+        and then again for fail-on checks.
+        """
+        from coderev.reviewer import ReviewResult, Issue, Severity, Category
+
+        mock_config = MagicMock()
+        mock_config.validate.return_value = []
+        mock_config_cls.load.return_value = mock_config
+
+        mock_reviewer = MagicMock()
+        mock_reviewer.review_file.side_effect = [
+            ReviewResult(
+                summary="File 1",
+                issues=[],
+                score=90,
+            ),
+            ReviewResult(
+                summary="File 2",
+                issues=[
+                    Issue(
+                        message="Minor issue",
+                        severity=Severity.LOW,
+                        category=Category.STYLE,
+                        line=1,
+                    )
+                ],
+                score=80,
+            ),
+        ]
+        mock_reviewer_cls.return_value = mock_reviewer
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("a.py").write_text("pass")
+            Path("b.py").write_text("pass")
+
+            result = runner.invoke(
+                main,
+                ["review", "a.py", "b.py", "--no-parallel", "--fail-on", "low"],
+            )
+            assert result.exit_code == 1
+            assert mock_reviewer.review_file.call_count == 2
+
     @patch("coderev.cli.get_git_diff")
     @patch("coderev.cli.CodeReviewer")
     @patch("coderev.cli.Config")
