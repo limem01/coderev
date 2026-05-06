@@ -102,3 +102,31 @@ secret.txt
         ignore = CodeRevIgnore.load(tmp_path)
         # Should still have default patterns
         assert ignore.should_ignore("node_modules/x.js") is True
+
+    def test_windows_style_patterns_in_ignore_file(self, tmp_path):
+        """Users on Windows often write patterns with backslashes.
+
+        We normalize both input paths and patterns so matching remains consistent.
+        """
+        ignore_file = tmp_path / ".coderevignore"
+        ignore_file.write_text(
+            """
+# Windows-style separators in patterns
+src\\generated\\
+*.secret
+""".lstrip()
+        )
+
+        ignore = CodeRevIgnore.load(tmp_path)
+        assert ignore.should_ignore("src/generated/file.py") is True
+        assert ignore.should_ignore(r"src\generated\file.py") is True
+        assert ignore.should_ignore("notes.secret") is True
+        assert ignore.should_ignore("src/main.py") is False
+
+    def test_directory_segment_matching_does_not_false_positive(self):
+        """Directory patterns like build/ should not match 'rebuild/' segments."""
+        ignore = CodeRevIgnore(patterns=["build/"])
+        assert ignore.should_ignore("build/output.js") is True
+        assert ignore.should_ignore("src/build/output.js") is True
+        assert ignore.should_ignore("rebuild/output.js") is False
+        assert ignore.should_ignore("src/rebuild/output.js") is False

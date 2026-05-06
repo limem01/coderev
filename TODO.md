@@ -34,6 +34,7 @@
 - [x] Unicode handling in diffs
 - [x] Normalize path separators when applying .coderevignore (Windows compatibility)
 - [x] Avoid double API calls when using --fail-on in sequential review mode
+- [x] Add regression tests for Windows-style patterns in .coderevignore (backslashes, directory segment matching)
 
 ## Documentation
 - [x] Add GIF demos to README
