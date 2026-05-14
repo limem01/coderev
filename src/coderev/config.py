@@ -136,8 +136,12 @@ class Config:
             search_paths.append(config_path)
         search_paths.extend([
             Path.cwd() / DEFAULT_CONFIG_FILENAME,
-            Path.home() / DEFAULT_CONFIG_FILENAME,
         ])
+        # Path.home() can raise if HOME/USERPROFILE are unset (common in tests)
+        try:
+            search_paths.append(Path.home() / DEFAULT_CONFIG_FILENAME)
+        except RuntimeError:
+            pass
         
         for path in search_paths:
             if path.exists():

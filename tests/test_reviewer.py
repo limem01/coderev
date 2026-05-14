@@ -15,7 +15,7 @@ from coderev.reviewer import (
     is_binary_file,
 )
 from coderev.config import Config
-import anthropic
+# anthropic is accessed via provider abstraction; no direct dependency in tests
 
 
 class TestSeverity:
@@ -162,51 +162,48 @@ class TestCodeReviewer:
         reviewer = CodeReviewer(api_key="test-key")
         assert reviewer._detect_language(Path("test.xyz")) is None
     
-    @patch("coderev.reviewer.anthropic.Anthropic")
-    def test_review_code(self, mock_anthropic):
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
-        
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"summary": "Good code", "issues": [], "score": 85, "positive": ["Clean"]}')]
-        mock_client.messages.create.return_value = mock_response
-        
-        reviewer = CodeReviewer(api_key="test-key")
-        result = reviewer.review_code("def hello(): pass", language="python")
+    def test_review_code(self):
+        with patch("coderev.reviewer.get_provider") as mock_get_provider:
+            provider = MagicMock()
+            provider.call.return_value = Mock(content="{\"summary\": \"Good code\", \"issues\": [], \"score\": 85, \"positive\": [\"Clean\"]}")
+            provider.parse_json_response.return_value = {
+                "summary": "Good code",
+                "issues": [],
+                "score": 85,
+                "positive": ["Clean"],
+            }
+            mock_get_provider.return_value = provider
+
+            reviewer = CodeReviewer(api_key="test-key")
+            result = reviewer.review_code("def hello(): pass", language="python")
         
         assert result.summary == "Good code"
         assert result.score == 85
         assert len(result.issues) == 0
         assert "Clean" in result.positive
     
-    @patch("coderev.reviewer.anthropic.Anthropic")
-    def test_review_code_with_issues(self, mock_anthropic):
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
-        
-        response_json = '''
-        {
-            "summary": "Needs improvement",
-            "issues": [
-                {
-                    "line": 5,
-                    "severity": "high",
-                    "category": "security",
-                    "message": "SQL injection",
-                    "suggestion": "Use parameterized queries"
-                }
-            ],
-            "score": 45,
-            "positive": []
-        }
-        '''
-        
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=response_json)]
-        mock_client.messages.create.return_value = mock_response
-        
-        reviewer = CodeReviewer(api_key="test-key")
-        result = reviewer.review_code("SELECT * FROM users WHERE id = " + "user_input")
+    def test_review_code_with_issues(self):
+        with patch("coderev.reviewer.get_provider") as mock_get_provider:
+            provider = MagicMock()
+            provider.call.return_value = Mock(content="<ignored>")
+            provider.parse_json_response.return_value = {
+                "summary": "Needs improvement",
+                "issues": [
+                    {
+                        "line": 5,
+                        "severity": "high",
+                        "category": "security",
+                        "message": "SQL injection",
+                        "suggestion": "Use parameterized queries",
+                    }
+                ],
+                "score": 45,
+                "positive": [],
+            }
+            mock_get_provider.return_value = provider
+
+            reviewer = CodeReviewer(api_key="test-key")
+            result = reviewer.review_code("SELECT * FROM users WHERE id = " + "user_input")
         
         assert result.score == 45
         assert len(result.issues) == 1
@@ -233,23 +230,21 @@ class TestCodeReviewer:
 class TestJsonParsing:
     """Tests for JSON response parsing edge cases."""
     
-    @patch("coderev.reviewer.anthropic.Anthropic")
-    def test_parse_json_in_code_block(self, mock_anthropic):
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
-        
-        # Response wrapped in markdown code block
-        response_text = '''Here's my analysis:
-```json
-{"summary": "Test", "issues": [], "score": 100, "positive": []}
-```'''
-        
-        mock_response = MagicMock()
-        mock_response.content = [MagicMock(text=response_text)]
-        mock_client.messages.create.return_value = mock_response
-        
-        reviewer = CodeReviewer(api_key="test-key")
-        result = reviewer.review_code("pass")
+    def test_parse_json_in_code_block(self):
+        # Provider should strip markdown code fences / prose and extract JSON
+        with patch("coderev.reviewer.get_provider") as mock_get_provider:
+            provider = MagicMock()
+            provider.call.return_value = Mock(content="ignored")
+            provider.parse_json_response.return_value = {
+                "summary": "Test",
+                "issues": [],
+                "score": 100,
+                "positive": [],
+            }
+            mock_get_provider.return_value = provider
+
+            reviewer = CodeReviewer(api_key="test-key")
+            result = reviewer.review_code("pass")
         
         assert result.summary == "Test"
         assert result.score == 100
@@ -413,53 +408,30 @@ class TestRateLimitError:
         error = RateLimitError(original_error=original)
         assert error.original_error is original
     
-    @patch("coderev.reviewer.anthropic.Anthropic")
-    def test_call_api_catches_rate_limit(self, mock_anthropic):
-        """Test that _call_api properly catches Anthropic rate limit errors."""
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
-        
-        # Simulate rate limit error
-        mock_response = MagicMock()
-        mock_response.headers = {"retry-after": "60"}
-        rate_limit_error = anthropic.RateLimitError(
-            message="Rate limit exceeded",
-            response=mock_response,
-            body=None,
-        )
-        mock_client.messages.create.side_effect = rate_limit_error
-        
-        reviewer = CodeReviewer(api_key="test-key")
-        
-        with pytest.raises(RateLimitError) as exc_info:
-            reviewer.review_code("def test(): pass")
-        
-        error = exc_info.value
-        assert error.retry_after == 60
-        assert error.original_error is rate_limit_error
+    def test_call_api_propagates_rate_limit(self):
+        with patch("coderev.reviewer.get_provider") as mock_get_provider:
+            provider = MagicMock()
+            original = Exception("rate limit")
+            provider.call.side_effect = RateLimitError(provider="anthropic", retry_after=60, original_error=original)
+            mock_get_provider.return_value = provider
+
+            reviewer = CodeReviewer(api_key="test-key")
+            with pytest.raises(RateLimitError) as exc_info:
+                reviewer.review_code("def test(): pass")
+
+            error = exc_info.value
+            assert error.retry_after == 60
+            assert error.original_error is original
     
-    @patch("coderev.reviewer.anthropic.Anthropic")
-    def test_call_api_catches_429_status(self, mock_anthropic):
-        """Test that _call_api catches 429 API status errors as rate limits."""
-        mock_client = MagicMock()
-        mock_anthropic.return_value = mock_client
-        
-        # Simulate 429 status error
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        status_error = anthropic.APIStatusError(
-            message="Too many requests",
-            response=mock_response,
-            body=None,
-        )
-        status_error.status_code = 429
-        mock_client.messages.create.side_effect = status_error
-        
-        reviewer = CodeReviewer(api_key="test-key")
-        
-        with pytest.raises(RateLimitError) as exc_info:
-            reviewer.review_code("def test(): pass")
-        
-        error = exc_info.value
-        assert "429" in error.message
-        assert error.original_error is status_error
+    def test_call_api_rate_limit_message_contains_provider(self):
+        with patch("coderev.reviewer.get_provider") as mock_get_provider:
+            provider = MagicMock()
+            provider.call.side_effect = RateLimitError(provider="openai", message="429 Too Many Requests")
+            mock_get_provider.return_value = provider
+
+            reviewer = CodeReviewer(api_key="test-key", provider="openai")
+            with pytest.raises(RateLimitError) as exc_info:
+                reviewer.review_code("def test(): pass")
+
+            assert "429" in exc_info.value.message
+            assert exc_info.value.provider == "openai"

@@ -69,6 +69,10 @@ class GitHubClient:
         # https://github.com/owner/repo/pull/123
         # github.com/owner/repo/pull/123
         
+        # urlparse('github.com/o/r/pull/1') treats it as a path (no netloc)
+        # so normalize missing-scheme URLs by prepending https://
+        if "://" not in url:
+            url = f"https://{url}"
         parsed = urlparse(url)
         path = parsed.path.strip("/")
         
