@@ -130,3 +130,16 @@ src\\generated\\
         assert ignore.should_ignore("src/build/output.js") is True
         assert ignore.should_ignore("rebuild/output.js") is False
         assert ignore.should_ignore("src/rebuild/output.js") is False
+
+    def test_leading_dot_slash_is_normalized(self):
+        ignore = CodeRevIgnore(patterns=["./build/", "./*.log"])
+        assert ignore.should_ignore("./build/output.js") is True
+        assert ignore.should_ignore("./app.log") is True
+        assert ignore.should_ignore("app.log") is True
+
+    def test_leading_slash_in_pattern_is_treated_as_repo_relative(self):
+        ignore = CodeRevIgnore(patterns=["/build/", "/*.log"])
+        assert ignore.should_ignore("build/output.js") is True
+        assert ignore.should_ignore("/build/output.js") is True
+        assert ignore.should_ignore("app.log") is True
+        assert ignore.should_ignore("/app.log") is True

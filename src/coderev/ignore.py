@@ -97,8 +97,19 @@ class CodeRevIgnore:
 
         On Windows, file paths often contain backslashes, while ignore patterns
         typically use forward slashes. We normalize to a POSIX-style string.
+
+        We also normalize common user inputs like leading './' (CLI usage) and
+        leading '/' (copy/pasted absolute-ish patterns) so matching stays
+        predictable.
         """
-        return str(path).replace("\\", "/")
+        s = str(path).replace("\\", "/")
+        # Normalize common prefixes
+        if s.startswith("./"):
+            s = s[2:]
+        # Treat leading slash as "root-relative" in the repo; we match against
+        # relative paths so drop it.
+        s = s.lstrip("/")
+        return s
 
     def should_ignore(self, path: Path | str) -> bool:
         """Check if a path should be ignored."""
@@ -112,7 +123,10 @@ class CodeRevIgnore:
 
         for pattern in all_patterns:
             # Normalize pattern too (users may copy Windows paths into ignore file)
-            pattern = pattern.replace("\\", "/")
+            pattern = pattern.replace("\\", "/").strip()
+            if pattern.startswith("./"):
+                pattern = pattern[2:]
+            pattern = pattern.lstrip("/")
 
             # Handle directory patterns (ending with /)
             if pattern.endswith("/"):
