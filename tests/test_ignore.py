@@ -1,7 +1,9 @@
 """Tests for .coderevignore handling."""
 
-import pytest
+import os
 from pathlib import Path
+
+import pytest
 
 from coderev.ignore import CodeRevIgnore, DEFAULT_IGNORE_PATTERNS
 

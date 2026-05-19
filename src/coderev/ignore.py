@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 from pathlib import Path
 from typing import Iterator
 
@@ -103,6 +104,9 @@ class CodeRevIgnore:
         predictable.
         """
         s = str(path).replace("\\", "/")
+        # Match Windows' case-insensitive filesystem semantics.
+        if os.name == "nt":
+            s = s.lower()
         # Normalize common prefixes
         if s.startswith("./"):
             s = s[2:]
@@ -124,6 +128,8 @@ class CodeRevIgnore:
         for pattern in all_patterns:
             # Normalize pattern too (users may copy Windows paths into ignore file)
             pattern = pattern.replace("\\", "/").strip()
+            if os.name == "nt":
+                pattern = pattern.lower()
             if pattern.startswith("./"):
                 pattern = pattern[2:]
             pattern = pattern.lstrip("/")
