@@ -145,3 +145,18 @@ src\\generated\\
         assert ignore.should_ignore("/build/output.js") is True
         assert ignore.should_ignore("app.log") is True
         assert ignore.should_ignore("/app.log") is True
+
+    def test_negation_patterns_unignore_files(self):
+        ignore = CodeRevIgnore(patterns=["*.log", "!important.log"])
+        assert ignore.should_ignore("debug.log") is True
+        assert ignore.should_ignore("important.log") is False
+
+    def test_negation_patterns_last_match_wins(self):
+        ignore = CodeRevIgnore(patterns=["!important.log", "*.log"])
+        # The later ignore should take precedence
+        assert ignore.should_ignore("important.log") is True
+
+    def test_negation_patterns_work_with_directories(self):
+        ignore = CodeRevIgnore(patterns=["build/", "!build/keep.txt"])
+        assert ignore.should_ignore("build/output.js") is True
+        assert ignore.should_ignore("build/keep.txt") is False

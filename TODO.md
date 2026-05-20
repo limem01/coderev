@@ -42,3 +42,6 @@
 - [x] Write detailed API docs
 - [x] Add more code examples
 - [x] Create comparison with other tools
+
+## New Tasks
+- [x] Support negation patterns in .coderevignore (e.g. `!important.log` to unignore)

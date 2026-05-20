@@ -115,44 +115,73 @@ class CodeRevIgnore:
         s = s.lstrip("/")
         return s
 
+    def _normalize_pattern(self, pattern: str) -> str:
+        """Normalize a pattern so matching is consistent across OSes."""
+        p = pattern.replace("\\", "/").strip()
+        # Allow users to use leading ./ or / (repo-relative) in patterns.
+        if os.name == "nt":
+            p = p.lower()
+        if p.startswith("./"):
+            p = p[2:]
+        p = p.lstrip("/")
+        return p
+
+    def _matches(self, pattern: str, path_str: str, path_str_padded: str) -> bool:
+        """Check whether a *normalized* pattern matches a *normalized* path string."""
+        # Handle directory patterns (ending with /)
+        if pattern.endswith("/"):
+            dir_pattern = pattern.rstrip("/")
+            # Match path segments (e.g. /node_modules/ anywhere in the path)
+            if f"/{dir_pattern}/" in path_str_padded:
+                return True
+            # Fallback glob matching
+            if fnmatch.fnmatch(path_str, f"*/{dir_pattern}/*"):
+                return True
+            if fnmatch.fnmatch(path_str, f"{dir_pattern}/*"):
+                return True
+            return False
+
+        # Regular glob matching
+        if fnmatch.fnmatch(path_str, pattern):
+            return True
+        if fnmatch.fnmatch(Path(path_str).name, pattern):
+            return True
+        return False
+
     def should_ignore(self, path: Path | str) -> bool:
-        """Check if a path should be ignored."""
+        """Check if a path should be ignored.
+
+        Supports negation patterns prefixed with '!'. Like gitignore semantics,
+        patterns are evaluated top-to-bottom and the last matching rule wins.
+        """
         path_str = self._normalize_path(path)
         # Make directory-segment checks robust by ensuring separators at ends.
         path_str_padded = f"/{path_str.strip('/')}/"
 
-        all_patterns = self.patterns.copy()
+        # Put defaults first so user-provided patterns (including negations)
+        # can override them.
+        all_patterns: list[str] = []
         if self._include_defaults:
             all_patterns.extend(DEFAULT_IGNORE_PATTERNS)
+        all_patterns.extend(self.patterns)
 
-        for pattern in all_patterns:
-            # Normalize pattern too (users may copy Windows paths into ignore file)
-            pattern = pattern.replace("\\", "/").strip()
-            if os.name == "nt":
-                pattern = pattern.lower()
-            if pattern.startswith("./"):
-                pattern = pattern[2:]
-            pattern = pattern.lstrip("/")
+        ignored = False
 
-            # Handle directory patterns (ending with /)
-            if pattern.endswith("/"):
-                dir_pattern = pattern.rstrip("/")
-                # Match path segments (e.g. /node_modules/ anywhere in the path)
-                if f"/{dir_pattern}/" in path_str_padded:
-                    return True
-                # Fallback glob matching
-                if fnmatch.fnmatch(path_str, f"*/{dir_pattern}/*"):
-                    return True
-                if fnmatch.fnmatch(path_str, f"{dir_pattern}/*"):
-                    return True
-            else:
-                # Regular glob matching
-                if fnmatch.fnmatch(path_str, pattern):
-                    return True
-                if fnmatch.fnmatch(Path(path_str).name, pattern):
-                    return True
+        for raw_pattern in all_patterns:
+            raw_pattern = raw_pattern.strip()
+            if not raw_pattern or raw_pattern.startswith("#"):
+                continue
 
-        return False
+            negated = raw_pattern.startswith("!")
+            pattern = raw_pattern[1:] if negated else raw_pattern
+            pattern = self._normalize_pattern(pattern)
+            if not pattern:
+                continue
+
+            if self._matches(pattern, path_str, path_str_padded):
+                ignored = not negated
+
+        return ignored
     
     def filter_paths(self, paths: list[Path]) -> Iterator[Path]:
         """Filter a list of paths, yielding only non-ignored ones."""
