@@ -45,3 +45,4 @@
 
 ## New Tasks
 - [x] Support negation patterns in .coderevignore (e.g. `!important.log` to unignore)
+- [x] Optional `.gitignore` integration (load existing repo exclusions; `.coderevignore` still overrides)

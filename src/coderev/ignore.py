@@ -60,10 +60,18 @@ class CodeRevIgnore:
         self._include_defaults = True
     
     @classmethod
-    def load(cls, root: Path | None = None) -> CodeRevIgnore:
-        """Load .coderevignore from root directory or search upward."""
+    def load(cls, root: Path | None = None, use_gitignore: bool = False) -> CodeRevIgnore:
+        """Load .coderevignore from root directory or search upward.
+
+        Args:
+            root: Directory to look in first; falls back to cwd then home.
+            use_gitignore: When True, also fold in patterns from a sibling
+                ``.gitignore`` so existing repo exclusions are reused. The
+                ``.coderevignore`` patterns are applied last, so they (including
+                negations) can override anything inherited from ``.gitignore``.
+        """
         patterns: list[str] = []
-        
+
         search_paths = []
         if root:
             search_paths.append(root / ".coderevignore")
@@ -71,12 +79,35 @@ class CodeRevIgnore:
             Path.cwd() / ".coderevignore",
             Path.home() / ".coderevignore",
         ])
-        
+
+        coderev_path: Path | None = None
         for path in search_paths:
             if path.exists():
-                patterns.extend(cls._parse_file(path))
+                coderev_path = path
                 break
-        
+
+        if use_gitignore:
+            # Prefer a .gitignore next to the chosen .coderevignore, else one in
+            # the requested root / cwd.
+            gitignore_dirs = []
+            if coderev_path:
+                gitignore_dirs.append(coderev_path.parent)
+            if root:
+                gitignore_dirs.append(root)
+            gitignore_dirs.append(Path.cwd())
+            seen: set[Path] = set()
+            for d in gitignore_dirs:
+                gi = d / ".gitignore"
+                if gi in seen:
+                    continue
+                seen.add(gi)
+                if gi.exists():
+                    patterns.extend(cls._parse_file(gi))
+                    break
+
+        if coderev_path:
+            patterns.extend(cls._parse_file(coderev_path))
+
         return cls(patterns)
     
     @staticmethod
@@ -198,17 +229,22 @@ class CodeRevIgnore:
         self._include_defaults = False
 
 
-def should_ignore(path: Path | str, additional_patterns: list[str] | None = None) -> bool:
+def should_ignore(
+    path: Path | str,
+    additional_patterns: list[str] | None = None,
+    use_gitignore: bool = False,
+) -> bool:
     """Convenience function to check if a path should be ignored.
-    
+
     Args:
         path: The path to check.
         additional_patterns: Optional list of additional patterns to check against.
-    
+        use_gitignore: When True, also load patterns from a nearby ``.gitignore``.
+
     Returns:
         True if the path should be ignored.
     """
-    ignorer = CodeRevIgnore.load()
+    ignorer = CodeRevIgnore.load(use_gitignore=use_gitignore)
     if additional_patterns:
         for pattern in additional_patterns:
             ignorer.add_pattern(pattern)
