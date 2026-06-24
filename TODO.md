@@ -47,3 +47,4 @@
 - [x] Support negation patterns in .coderevignore (e.g. `!important.log` to unignore)
 - [x] Optional `.gitignore` integration (load existing repo exclusions; `.coderevignore` still overrides)
 - [x] Support `**` globstar patterns in `.coderevignore` (e.g. `docs/**/*.md`, `**/build/`) with proper zero-or-more-directory semantics
+- [x] Anchor `.coderevignore` patterns with a leading `/` (or `./`) to the repo root (gitignore semantics): `/build/` matches top-level `build/` but not nested `src/build/`; unanchored patterns still match at any depth

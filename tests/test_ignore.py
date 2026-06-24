@@ -146,6 +146,35 @@ src\\generated\\
         assert ignore.should_ignore("app.log") is True
         assert ignore.should_ignore("/app.log") is True
 
+    def test_leading_slash_anchors_to_repo_root(self):
+        """A leading '/' anchors a pattern to the root (gitignore semantics)."""
+        # 'reports/' is not in DEFAULT_IGNORE_PATTERNS, so the anchoring is what
+        # determines the result here.
+        ignore = CodeRevIgnore(patterns=["/reports/"])
+        # Top-level reports/ is ignored...
+        assert ignore.should_ignore("reports/output.js") is True
+        # ...but a nested reports/ is NOT, because the pattern is anchored.
+        assert ignore.should_ignore("src/reports/output.js") is False
+        assert ignore.should_ignore("a/b/reports/output.js") is False
+
+    def test_unanchored_directory_still_matches_at_any_depth(self):
+        """Without a leading slash, a directory pattern matches at any depth."""
+        ignore = CodeRevIgnore(patterns=["reports/"])
+        assert ignore.should_ignore("reports/output.js") is True
+        assert ignore.should_ignore("src/reports/output.js") is True
+
+    def test_leading_slash_anchors_file_glob_to_root(self):
+        """An anchored file glob keeps '*' within the top-level segment."""
+        ignore = CodeRevIgnore(patterns=["/*.tmp"])
+        assert ignore.should_ignore("app.tmp") is True
+        # A nested file is not matched by the anchored, single-segment glob.
+        assert ignore.should_ignore("src/app.tmp") is False
+
+    def test_leading_dot_slash_anchors_to_root(self):
+        ignore = CodeRevIgnore(patterns=["./reports/"])
+        assert ignore.should_ignore("reports/output.js") is True
+        assert ignore.should_ignore("src/reports/output.js") is False
+
     def test_negation_patterns_unignore_files(self):
         ignore = CodeRevIgnore(patterns=["*.log", "!important.log"])
         assert ignore.should_ignore("debug.log") is True

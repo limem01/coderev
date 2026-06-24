@@ -193,22 +193,46 @@ class CodeRevIgnore:
         s = s.lstrip("/")
         return s
 
-    def _normalize_pattern(self, pattern: str) -> str:
-        """Normalize a pattern so matching is consistent across OSes."""
+    def _normalize_pattern(self, pattern: str) -> tuple[str, bool]:
+        """Normalize a pattern so matching is consistent across OSes.
+
+        Returns a ``(pattern, anchored)`` tuple. Following gitignore semantics, a
+        leading ``/`` (or ``./``) anchors the pattern to the repository root, so
+        ``/build/`` matches a top-level ``build/`` but not a nested
+        ``src/build/``. Patterns without a leading separator continue to match at
+        any depth.
+        """
         p = pattern.replace("\\", "/").strip()
         # Allow users to use leading ./ or / (repo-relative) in patterns.
         if os.name == "nt":
             p = p.lower()
+        anchored = False
         if p.startswith("./"):
             p = p[2:]
-        p = p.lstrip("/")
-        return p
+            anchored = True
+        if p.startswith("/"):
+            p = p.lstrip("/")
+            anchored = True
+        return p, anchored
 
-    def _matches(self, pattern: str, path_str: str, path_str_padded: str) -> bool:
+    def _matches(
+        self,
+        pattern: str,
+        path_str: str,
+        path_str_padded: str,
+        anchored: bool = False,
+    ) -> bool:
         """Check whether a *normalized* pattern matches a *normalized* path string."""
         # Handle globstar patterns (containing **) with proper gitignore
-        # semantics: ** crosses directory separators, * does not.
+        # semantics: ** crosses directory separators, * does not. Globstar
+        # patterns are already anchored at the start of the path via regex.
         if "**" in pattern:
+            return self._matches_globstar(pattern, path_str)
+
+        # Anchored patterns (leading '/' or './') must match from the repo root.
+        # Reuse the globstar regex builder: it anchors with ^...$ and keeps '*'
+        # within a single path segment, giving true gitignore anchoring.
+        if anchored:
             return self._matches_globstar(pattern, path_str)
 
         # Handle directory patterns (ending with /)
@@ -267,11 +291,11 @@ class CodeRevIgnore:
 
             negated = raw_pattern.startswith("!")
             pattern = raw_pattern[1:] if negated else raw_pattern
-            pattern = self._normalize_pattern(pattern)
+            pattern, anchored = self._normalize_pattern(pattern)
             if not pattern:
                 continue
 
-            if self._matches(pattern, path_str, path_str_padded):
+            if self._matches(pattern, path_str, path_str_padded, anchored):
                 ignored = not negated
 
         return ignored

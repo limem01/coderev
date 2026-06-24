@@ -747,6 +747,7 @@ if ignore.should_ignore("path/to/file.min.js"):
 | --- | --- |
 | `*.log` | Any file ending in `.log`, at any depth |
 | `build/` | A `build` directory anywhere in the tree |
+| `/build/` | A *top-level* `build` directory only — a leading `/` (or `./`) anchors the pattern to the repo root, so `src/build/` is not matched |
 | `!important.log` | Negation — unignore a previously ignored path (last match wins) |
 | `**/build/` | A `build` directory at any depth (zero or more leading directories) |
 | `docs/**/*.md` | Markdown files under `docs/`, including directly inside it (`**` matches zero or more directories) |
@@ -755,6 +756,11 @@ if ignore.should_ignore("path/to/file.min.js"):
 `**` (globstar) crosses directory separators, while a single `*` stays within
 one path segment. Globstar patterns are anchored to their leading segment, so
 `docs/**/*.md` does not match `other/docs/x.md`.
+
+A leading `/` (or `./`) anchors a pattern to the repository root, matching
+gitignore semantics: `/build/` ignores a top-level `build/` but leaves a nested
+`src/build/` untouched. Patterns without a leading separator continue to match
+at any depth.
 
 ### `is_binary_file(file_path) -> bool`
 
