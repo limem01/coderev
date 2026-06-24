@@ -46,3 +46,4 @@
 ## New Tasks
 - [x] Support negation patterns in .coderevignore (e.g. `!important.log` to unignore)
 - [x] Optional `.gitignore` integration (load existing repo exclusions; `.coderevignore` still overrides)
+- [x] Support `**` globstar patterns in `.coderevignore` (e.g. `docs/**/*.md`, `**/build/`) with proper zero-or-more-directory semantics

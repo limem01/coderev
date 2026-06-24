@@ -4,8 +4,55 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 from pathlib import Path
 from typing import Iterator
+
+
+def _globstar_to_regex(pattern: str) -> str:
+    """Translate a glob pattern containing ``**`` into a regex string.
+
+    Unlike :mod:`fnmatch`, this distinguishes ``**`` (matches across directory
+    separators, including *zero* segments) from ``*`` (matches within a single
+    path segment). This mirrors gitignore semantics:
+
+    * ``**/`` matches zero or more leading directories, so ``docs/**/*.md``
+      matches both ``docs/x.md`` and ``docs/a/b.md``.
+    * a trailing ``/**`` matches everything underneath a directory.
+    * ``*`` and ``?`` never cross ``/``.
+    """
+    i = 0
+    n = len(pattern)
+    out: list[str] = []
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            if i + 1 < n and pattern[i + 1] == "*":
+                j = i + 2
+                if j < n and pattern[j] == "/":
+                    # '**/' -> zero or more directory segments
+                    out.append("(?:.*/)?")
+                    i = j + 1
+                    continue
+                # trailing or bare '**' -> anything (including separators)
+                out.append(".*")
+                i = j
+                continue
+            # single '*' -> anything within a segment
+            out.append("[^/]*")
+            i += 1
+            continue
+        if c == "?":
+            out.append("[^/]")
+            i += 1
+            continue
+        if c == "/":
+            out.append("/")
+            i += 1
+            continue
+        out.append(re.escape(c))
+        i += 1
+    return "".join(out)
 
 
 DEFAULT_IGNORE_PATTERNS = [
@@ -159,6 +206,11 @@ class CodeRevIgnore:
 
     def _matches(self, pattern: str, path_str: str, path_str_padded: str) -> bool:
         """Check whether a *normalized* pattern matches a *normalized* path string."""
+        # Handle globstar patterns (containing **) with proper gitignore
+        # semantics: ** crosses directory separators, * does not.
+        if "**" in pattern:
+            return self._matches_globstar(pattern, path_str)
+
         # Handle directory patterns (ending with /)
         if pattern.endswith("/"):
             dir_pattern = pattern.rstrip("/")
@@ -178,6 +230,16 @@ class CodeRevIgnore:
         if fnmatch.fnmatch(Path(path_str).name, pattern):
             return True
         return False
+
+    def _matches_globstar(self, pattern: str, path_str: str) -> bool:
+        """Match a pattern containing ``**`` against a normalized path string."""
+        if pattern.endswith("/"):
+            # Directory pattern: match the directory itself and anything under it.
+            body = pattern.rstrip("/")
+            regex = "^" + _globstar_to_regex(body) + "(?:/.*)?$"
+        else:
+            regex = "^" + _globstar_to_regex(pattern) + "$"
+        return re.match(regex, path_str) is not None
 
     def should_ignore(self, path: Path | str) -> bool:
         """Check if a path should be ignored.

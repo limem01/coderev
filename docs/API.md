@@ -741,6 +741,21 @@ if ignore.should_ignore("path/to/file.min.js"):
     print("Skipped")
 ```
 
+**Supported pattern syntax:**
+
+| Pattern | Matches |
+| --- | --- |
+| `*.log` | Any file ending in `.log`, at any depth |
+| `build/` | A `build` directory anywhere in the tree |
+| `!important.log` | Negation — unignore a previously ignored path (last match wins) |
+| `**/build/` | A `build` directory at any depth (zero or more leading directories) |
+| `docs/**/*.md` | Markdown files under `docs/`, including directly inside it (`**` matches zero or more directories) |
+| `generated/**` | Everything under `generated/` |
+
+`**` (globstar) crosses directory separators, while a single `*` stays within
+one path segment. Globstar patterns are anchored to their leading segment, so
+`docs/**/*.md` does not match `other/docs/x.md`.
+
 ### `is_binary_file(file_path) -> bool`
 
 Detect binary files using extension checking and content analysis (null bytes, control characters, encoding detection).

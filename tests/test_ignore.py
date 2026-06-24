@@ -160,3 +160,52 @@ src\\generated\\
         ignore = CodeRevIgnore(patterns=["build/", "!build/keep.txt"])
         assert ignore.should_ignore("build/output.js") is True
         assert ignore.should_ignore("build/keep.txt") is False
+
+
+class TestGlobstarPatterns:
+    """Tests for ** (globstar) pattern support."""
+
+    def test_globstar_matches_zero_or_more_directories(self):
+        ignore = CodeRevIgnore(patterns=["docs/**/*.md"])
+        # Zero intermediate directories
+        assert ignore.should_ignore("docs/x.md") is True
+        # One or more intermediate directories
+        assert ignore.should_ignore("docs/a/b.md") is True
+        assert ignore.should_ignore("docs/a/b/c.md") is True
+
+    def test_globstar_is_anchored(self):
+        ignore = CodeRevIgnore(patterns=["docs/**/*.md"])
+        # The leading segment is anchored; a nested docs/ should not match.
+        assert ignore.should_ignore("other/docs/x.md") is False
+
+    def test_globstar_respects_trailing_extension(self):
+        ignore = CodeRevIgnore(patterns=["docs/**/*.md"])
+        assert ignore.should_ignore("docs/a/b.txt") is False
+
+    def test_leading_globstar_matches_directory_anywhere(self):
+        ignore = CodeRevIgnore(patterns=["**/build/"])
+        assert ignore.should_ignore("build/output.js") is True
+        assert ignore.should_ignore("a/b/build/output.js") is True
+        # Should not false-positive on similarly named directories.
+        assert ignore.should_ignore("rebuild/output.js") is False
+
+    def test_trailing_globstar_matches_everything_under_directory(self):
+        ignore = CodeRevIgnore(patterns=["generated/**"])
+        assert ignore.should_ignore("generated/a.py") is True
+        assert ignore.should_ignore("generated/a/b.py") is True
+        assert ignore.should_ignore("other/a.py") is False
+
+    def test_single_star_does_not_cross_separator_in_globstar_pattern(self):
+        # In a globstar pattern, a lone * must stay within one path segment.
+        ignore = CodeRevIgnore(patterns=["src/*/mod.py"])
+        # (no ** here, so this exercises regular matching) — sanity baseline
+        assert ignore.should_ignore("src/pkg/mod.py") is True
+
+        ignore2 = CodeRevIgnore(patterns=["src/**/*.py"])
+        assert ignore2.should_ignore("src/a/b/file.py") is True
+        assert ignore2.should_ignore("src/file.py") is True
+
+    def test_globstar_with_negation(self):
+        ignore = CodeRevIgnore(patterns=["src/**/*.py", "!src/**/keep.py"])
+        assert ignore.should_ignore("src/a/b/util.py") is True
+        assert ignore.should_ignore("src/a/b/keep.py") is False
