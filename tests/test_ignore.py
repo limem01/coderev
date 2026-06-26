@@ -238,3 +238,32 @@ class TestGlobstarPatterns:
         ignore = CodeRevIgnore(patterns=["src/**/*.py", "!src/**/keep.py"])
         assert ignore.should_ignore("src/a/b/util.py") is True
         assert ignore.should_ignore("src/a/b/keep.py") is False
+
+    def test_single_star_does_not_cross_separator_in_plain_pattern(self):
+        # gitignore: a lone '*' never crosses '/', even without '**'.
+        ignore = CodeRevIgnore(patterns=["src/*.py"])
+        ignore.disable_defaults()
+        assert ignore.should_ignore("src/a.py") is True
+        assert ignore.should_ignore("src/sub/a.py") is False
+
+    def test_internal_separator_anchors_to_root(self):
+        # A separator in the middle anchors the pattern to the repo root, so it
+        # must not match the same tail nested under another directory.
+        ignore = CodeRevIgnore(patterns=["doc/frotz"])
+        ignore.disable_defaults()
+        assert ignore.should_ignore("doc/frotz") is True
+        assert ignore.should_ignore("a/doc/frotz") is False
+
+    def test_slashless_dir_pattern_still_matches_any_depth(self):
+        # A pattern with no internal separator keeps matching at any depth.
+        ignore = CodeRevIgnore(patterns=["build/"])
+        ignore.disable_defaults()
+        assert ignore.should_ignore("build/x") is True
+        assert ignore.should_ignore("a/b/build/x") is True
+
+    def test_mid_pattern_star_in_directory_segment(self):
+        # 'logs/*/debug.txt' matches exactly one intermediate segment.
+        ignore = CodeRevIgnore(patterns=["logs/*/debug.txt"])
+        ignore.disable_defaults()
+        assert ignore.should_ignore("logs/x/debug.txt") is True
+        assert ignore.should_ignore("logs/x/y/debug.txt") is False

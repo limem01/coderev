@@ -213,6 +213,15 @@ class CodeRevIgnore:
         if p.startswith("/"):
             p = p.lstrip("/")
             anchored = True
+        # gitignore semantics: a separator anywhere except a lone trailing one
+        # anchors the pattern to the repo root (so ``src/*.py`` is relative to
+        # root and its ``*`` does not cross directory separators). Patterns with
+        # no internal separator (e.g. ``build/``, ``*.py``) still match at any
+        # depth.
+        if not anchored:
+            core = p[:-1] if p.endswith("/") else p
+            if "/" in core:
+                anchored = True
         return p, anchored
 
     def _matches(

@@ -48,3 +48,4 @@
 - [x] Optional `.gitignore` integration (load existing repo exclusions; `.coderevignore` still overrides)
 - [x] Support `**` globstar patterns in `.coderevignore` (e.g. `docs/**/*.md`, `**/build/`) with proper zero-or-more-directory semantics
 - [x] Anchor `.coderevignore` patterns with a leading `/` (or `./`) to the repo root (gitignore semantics): `/build/` matches top-level `build/` but not nested `src/build/`; unanchored patterns still match at any depth
+- [x] Anchor `.coderevignore` patterns containing an internal `/` to the repo root and stop a lone `*` from crossing directory separators (gitignore semantics): `src/*.py` matches `src/a.py` but not `src/sub/a.py`; `doc/frotz` no longer matches `a/doc/frotz`
