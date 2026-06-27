@@ -185,17 +185,75 @@ class CodeRevIgnore:
     
     @staticmethod
     def _parse_file(path: Path) -> list[str]:
-        """Parse a .coderevignore file."""
+        """Parse a .coderevignore file.
+
+        Lines are kept verbatim apart from the trailing newline so that
+        gitignore escape semantics handled later (``\\#``/``\\!`` literals and
+        backslash-escaped trailing spaces) survive intact. Blank lines are
+        skipped here; comment and escape interpretation happens in
+        :meth:`_preprocess_line`.
+        """
         patterns = []
-        
+
         with open(path) as f:
             for line in f:
-                line = line.strip()
-                # Skip empty lines and comments
-                if line and not line.startswith("#"):
-                    patterns.append(line)
-        
+                line = line.rstrip("\n").rstrip("\r")
+                # Skip clearly empty lines; keep trailing spaces (which may be
+                # backslash-escaped) and any leading backslash on real patterns.
+                if line.strip() == "":
+                    continue
+                patterns.append(line)
+
         return patterns
+
+    @staticmethod
+    def _strip_trailing_ws(line: str) -> str:
+        """Strip trailing whitespace unless it is backslash-escaped.
+
+        Mirrors gitignore: ``foo  `` -> ``foo`` but ``foo\\ `` keeps a single
+        trailing space (the escaping backslash is consumed).
+        """
+        i = len(line)
+        while i > 0 and line[i - 1] in " \t":
+            i -= 1
+        if i == len(line):
+            return line
+        prefix, trailing = line[:i], line[i:]
+        # Count backslashes immediately preceding the whitespace run.
+        nb = 0
+        while nb < len(prefix) and prefix[len(prefix) - 1 - nb] == "\\":
+            nb += 1
+        if nb % 2 == 1:
+            # The first whitespace char is escaped: drop the backslash, keep it.
+            return prefix[:-1] + trailing[0]
+        return prefix
+
+    @staticmethod
+    def _preprocess_line(raw: str) -> tuple[str, bool] | None:
+        """Interpret a raw ignore line per gitignore escape rules.
+
+        Returns ``(pattern, negated)`` or ``None`` for blank/comment lines.
+
+        * Unescaped leading ``#`` marks a comment.
+        * ``\\#`` / ``\\!`` are literal leading ``#`` / ``!`` (the backslash is
+          consumed, and ``\\!`` is *not* a negation).
+        * A leading ``!`` negates the pattern.
+        * Trailing whitespace is stripped unless backslash-escaped.
+        """
+        line = CodeRevIgnore._strip_trailing_ws(raw)
+        if not line or line.startswith("#"):
+            return None
+
+        negated = False
+        if line.startswith("\\#") or line.startswith("\\!"):
+            line = line[1:]
+        elif line.startswith("!"):
+            negated = True
+            line = line[1:]
+
+        if not line:
+            return None
+        return line, negated
     
     def _normalize_path(self, path: Path | str) -> str:
         """Normalize paths so ignore patterns behave consistently across OSes.
@@ -320,12 +378,11 @@ class CodeRevIgnore:
         ignored = False
 
         for raw_pattern in all_patterns:
-            raw_pattern = raw_pattern.strip()
-            if not raw_pattern or raw_pattern.startswith("#"):
+            parsed = self._preprocess_line(raw_pattern)
+            if parsed is None:
                 continue
 
-            negated = raw_pattern.startswith("!")
-            pattern = raw_pattern[1:] if negated else raw_pattern
+            pattern, negated = parsed
             pattern, anchored = self._normalize_pattern(pattern)
             if not pattern:
                 continue
