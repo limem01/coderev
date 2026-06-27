@@ -20,12 +20,38 @@ def _globstar_to_regex(pattern: str) -> str:
       matches both ``docs/x.md`` and ``docs/a/b.md``.
     * a trailing ``/**`` matches everything underneath a directory.
     * ``*`` and ``?`` never cross ``/``.
+    * ``[...]`` character classes (including ranges like ``[a-z]`` and negations
+      like ``[!0-9]``) match a single character, mirroring gitignore.
     """
     i = 0
     n = len(pattern)
     out: list[str] = []
     while i < n:
         c = pattern[i]
+        if c == "[":
+            # Parse a character class, e.g. [abc], [a-z], [!0-9].
+            j = i + 1
+            if j < n and pattern[j] in ("!", "^"):
+                j += 1
+            # A ']' immediately after the (optional) negation is a literal.
+            if j < n and pattern[j] == "]":
+                j += 1
+            while j < n and pattern[j] != "]":
+                j += 1
+            if j >= n:
+                # Unterminated class: treat '[' as a literal character.
+                out.append(re.escape("["))
+                i += 1
+                continue
+            inner = pattern[i + 1 : j]
+            # Translate a leading '!' (glob negation) to regex '^'.
+            if inner.startswith("!"):
+                inner = "^" + inner[1:]
+            # Escape backslashes so the class can't introduce regex escapes.
+            inner = inner.replace("\\", "\\\\")
+            out.append("[" + inner + "]")
+            i = j + 1
+            continue
         if c == "*":
             if i + 1 < n and pattern[i + 1] == "*":
                 j = i + 2
