@@ -51,3 +51,4 @@
 - [x] Anchor `.coderevignore` patterns containing an internal `/` to the repo root and stop a lone `*` from crossing directory separators (gitignore semantics): `src/*.py` matches `src/a.py` but not `src/sub/a.py`; `doc/frotz` no longer matches `a/doc/frotz`
 - [x] Support `[...]` character classes in anchored/globstar `.coderevignore` patterns (ranges `[a-z]`, negation `[!0-9]`) so they match a single non-separator char like gitignore, fixing the inconsistency where only the unanchored `fnmatch` path handled brackets
 - [x] Support gitignore escape semantics in `.coderevignore`: `\#` is a literal leading `#` (not a comment), `\!` is a literal leading `!` (not a negation), and unescaped trailing whitespace is stripped
+- [x] Precompile `.coderevignore` patterns once and cache them (avoid re-parsing/normalizing/recompiling every pattern for every path); invalidate the cache on `add_pattern`/`disable_defaults`

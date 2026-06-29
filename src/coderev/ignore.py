@@ -131,6 +131,11 @@ class CodeRevIgnore:
     def __init__(self, patterns: list[str] | None = None):
         self.patterns = patterns or []
         self._include_defaults = True
+        # Lazily-built list of (matcher_callable, negated) tuples. Building it
+        # parses, normalizes and (where relevant) compiles regexes for every
+        # pattern exactly once, instead of repeating that work for every path
+        # checked. Invalidated whenever the pattern set changes.
+        self._compiled: list[tuple] | None = None
     
     @classmethod
     def load(cls, root: Path | None = None, use_gitignore: bool = False) -> CodeRevIgnore:
@@ -348,15 +353,90 @@ class CodeRevIgnore:
             return True
         return False
 
-    def _matches_globstar(self, pattern: str, path_str: str) -> bool:
-        """Match a pattern containing ``**`` against a normalized path string."""
+    @staticmethod
+    def _compile_globstar(pattern: str) -> re.Pattern:
+        """Compile a globstar/anchored pattern into an anchored regex.
+
+        Shared by both the lazy per-path matcher and :meth:`_matches_globstar`
+        so the two paths can never drift apart.
+        """
         if pattern.endswith("/"):
             # Directory pattern: match the directory itself and anything under it.
             body = pattern.rstrip("/")
             regex = "^" + _globstar_to_regex(body) + "(?:/.*)?$"
         else:
             regex = "^" + _globstar_to_regex(pattern) + "$"
-        return re.match(regex, path_str) is not None
+        return re.compile(regex)
+
+    def _matches_globstar(self, pattern: str, path_str: str) -> bool:
+        """Match a pattern containing ``**`` against a normalized path string."""
+        return self._compile_globstar(pattern).match(path_str) is not None
+
+    def _build_matcher(self, pattern: str, anchored: bool):
+        """Pre-build a matcher callable for a *normalized* pattern.
+
+        The returned callable has signature ``(path_str, path_str_padded) ->
+        bool`` and mirrors the dispatch in :meth:`_matches`, but any regex
+        compilation happens here (once) rather than on every path check.
+        """
+        # Globstar and anchored patterns are matched via an anchored regex.
+        if "**" in pattern or anchored:
+            regex = self._compile_globstar(pattern)
+            return lambda ps, _pp: regex.match(ps) is not None
+
+        # Directory patterns (ending with '/') match a path segment anywhere.
+        if pattern.endswith("/"):
+            dir_pattern = pattern.rstrip("/")
+            segment = f"/{dir_pattern}/"
+            glob_mid = f"*/{dir_pattern}/*"
+            glob_lead = f"{dir_pattern}/*"
+
+            def _dir_match(ps: str, pp: str) -> bool:
+                if segment in pp:
+                    return True
+                if fnmatch.fnmatch(ps, glob_mid):
+                    return True
+                if fnmatch.fnmatch(ps, glob_lead):
+                    return True
+                return False
+
+            return _dir_match
+
+        # Regular glob: match the full path or just the basename.
+        def _glob_match(ps: str, _pp: str) -> bool:
+            if fnmatch.fnmatch(ps, pattern):
+                return True
+            if fnmatch.fnmatch(Path(ps).name, pattern):
+                return True
+            return False
+
+        return _glob_match
+
+    def _compiled_patterns(self) -> list[tuple]:
+        """Return the cached list of ``(matcher, negated)`` tuples, building it
+        on first use. Defaults come first so user patterns (incl. negations)
+        can override them, matching :meth:`should_ignore`'s ordering."""
+        if self._compiled is not None:
+            return self._compiled
+
+        all_patterns: list[str] = []
+        if self._include_defaults:
+            all_patterns.extend(DEFAULT_IGNORE_PATTERNS)
+        all_patterns.extend(self.patterns)
+
+        compiled: list[tuple] = []
+        for raw_pattern in all_patterns:
+            parsed = self._preprocess_line(raw_pattern)
+            if parsed is None:
+                continue
+            pattern, negated = parsed
+            pattern, anchored = self._normalize_pattern(pattern)
+            if not pattern:
+                continue
+            compiled.append((self._build_matcher(pattern, anchored), negated))
+
+        self._compiled = compiled
+        return compiled
 
     def should_ignore(self, path: Path | str) -> bool:
         """Check if a path should be ignored.
@@ -368,26 +448,11 @@ class CodeRevIgnore:
         # Make directory-segment checks robust by ensuring separators at ends.
         path_str_padded = f"/{path_str.strip('/')}/"
 
-        # Put defaults first so user-provided patterns (including negations)
-        # can override them.
-        all_patterns: list[str] = []
-        if self._include_defaults:
-            all_patterns.extend(DEFAULT_IGNORE_PATTERNS)
-        all_patterns.extend(self.patterns)
-
+        # Patterns are compiled once and cached; the last matching rule wins so
+        # negations can re-include paths excluded by an earlier rule.
         ignored = False
-
-        for raw_pattern in all_patterns:
-            parsed = self._preprocess_line(raw_pattern)
-            if parsed is None:
-                continue
-
-            pattern, negated = parsed
-            pattern, anchored = self._normalize_pattern(pattern)
-            if not pattern:
-                continue
-
-            if self._matches(pattern, path_str, path_str_padded, anchored):
+        for matcher, negated in self._compiled_patterns():
+            if matcher(path_str, path_str_padded):
                 ignored = not negated
 
         return ignored
@@ -401,10 +466,12 @@ class CodeRevIgnore:
     def add_pattern(self, pattern: str) -> None:
         """Add a custom ignore pattern."""
         self.patterns.append(pattern)
-    
+        self._compiled = None  # invalidate cache
+
     def disable_defaults(self) -> None:
         """Disable default ignore patterns."""
         self._include_defaults = False
+        self._compiled = None  # invalidate cache
 
 
 def should_ignore(
