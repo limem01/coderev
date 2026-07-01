@@ -346,12 +346,13 @@ class CodeRevIgnore:
                 return True
             return False
 
-        # Regular glob matching
-        if fnmatch.fnmatch(path_str, pattern):
-            return True
-        if fnmatch.fnmatch(Path(path_str).name, pattern):
-            return True
-        return False
+        # Regular glob matching. An unanchored pattern with no separator matches
+        # "at any level" (gitignore semantics), but its ``*``/``?`` must not
+        # cross directory separators. Matching each path *segment* individually
+        # gives both properties: it matches a basename like ``a.py`` against
+        # ``*.py`` at any depth, and a directory component like ``foo`` against
+        # ``foo`` -- while never letting a wildcard span a ``/``.
+        return any(fnmatch.fnmatch(seg, pattern) for seg in path_str.split("/") if seg)
 
     @staticmethod
     def _compile_globstar(pattern: str) -> re.Pattern:
@@ -402,13 +403,11 @@ class CodeRevIgnore:
 
             return _dir_match
 
-        # Regular glob: match the full path or just the basename.
+        # Regular glob: match any single path segment (see :meth:`_matches`).
+        # Segment-wise matching keeps ``*``/``?`` from crossing ``/`` while still
+        # matching at any depth, mirroring gitignore's no-separator patterns.
         def _glob_match(ps: str, _pp: str) -> bool:
-            if fnmatch.fnmatch(ps, pattern):
-                return True
-            if fnmatch.fnmatch(Path(ps).name, pattern):
-                return True
-            return False
+            return any(fnmatch.fnmatch(seg, pattern) for seg in ps.split("/") if seg)
 
         return _glob_match
 
