@@ -95,6 +95,35 @@ class TestGetModelPricing:
         upper = get_model_pricing("CLAUDE-3-SONNET")
         assert lower == upper
 
+    def test_claude_4_family_pricing(self):
+        """Current-generation Claude models should have explicit pricing."""
+        assert get_model_pricing("claude-opus-4-20250514") == (15.00, 75.00)
+        assert get_model_pricing("claude-opus-4-1-20250805") == (15.00, 75.00)
+        assert get_model_pricing("claude-sonnet-4-20250514") == (3.00, 15.00)
+        assert get_model_pricing("claude-haiku-4-5-20251001") == (1.00, 5.00)
+        assert get_model_pricing("claude-3-7-sonnet-20250219") == (3.00, 15.00)
+
+    def test_claude_4_aliases(self):
+        """Short aliases should resolve to the same pricing as the dated IDs."""
+        assert get_model_pricing("claude-opus-4") == get_model_pricing(
+            "claude-opus-4-20250514"
+        )
+        assert get_model_pricing("claude-sonnet-4") == get_model_pricing(
+            "claude-sonnet-4-20250514"
+        )
+        assert get_model_pricing("claude-3.7-sonnet") == (3.00, 15.00)
+
+    def test_gpt_41_family_pricing(self):
+        """GPT-4.1 family should have explicit pricing."""
+        assert get_model_pricing("gpt-4.1") == (2.00, 8.00)
+        assert get_model_pricing("gpt-4.1-mini") == (0.40, 1.60)
+        assert get_model_pricing("gpt-4.1-nano") == (0.10, 0.40)
+
+    def test_newer_reasoning_models_pricing(self):
+        """o3/o4 reasoning models should have explicit pricing."""
+        assert get_model_pricing("o3-mini") == (1.10, 4.40)
+        assert get_model_pricing("o4-mini") == (1.10, 4.40)
+
 
 class TestCostEstimate:
     """Tests for CostEstimate dataclass."""

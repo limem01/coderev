@@ -15,20 +15,32 @@ from coderev.reviewer import is_binary_file
 
 
 # Pricing per 1M tokens (input, output) in USD
-# Updated as of February 2025
+# Updated as of January 2026
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    # Anthropic Claude models
+    # Anthropic Claude 3 models
     "claude-3-opus-20240229": (15.00, 75.00),
     "claude-3-sonnet-20240229": (3.00, 15.00),
     "claude-3-haiku-20240307": (0.25, 1.25),
     "claude-3-5-sonnet-20241022": (3.00, 15.00),
     "claude-3-5-haiku-20241022": (1.00, 5.00),
+    # Anthropic Claude 3.7 models
+    "claude-3-7-sonnet-20250219": (3.00, 15.00),
+    # Anthropic Claude 4 models
+    "claude-opus-4-20250514": (15.00, 75.00),
+    "claude-opus-4-1-20250805": (15.00, 75.00),
+    "claude-sonnet-4-20250514": (3.00, 15.00),
+    "claude-haiku-4-5-20251001": (1.00, 5.00),
     # Aliases
     "claude-3-opus": (15.00, 75.00),
     "claude-3-sonnet": (3.00, 15.00),
     "claude-3-haiku": (0.25, 1.25),
     "claude-3.5-sonnet": (3.00, 15.00),
     "claude-3.5-haiku": (1.00, 5.00),
+    "claude-3.7-sonnet": (3.00, 15.00),
+    "claude-opus-4": (15.00, 75.00),
+    "claude-opus-4.1": (15.00, 75.00),
+    "claude-sonnet-4": (3.00, 15.00),
+    "claude-haiku-4.5": (1.00, 5.00),
     # OpenAI models
     "gpt-4": (30.00, 60.00),
     "gpt-4-turbo": (10.00, 30.00),
@@ -36,9 +48,16 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-3.5-turbo": (0.50, 1.50),
+    # OpenAI GPT-4.1 family
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    # OpenAI reasoning models
     "o1-preview": (15.00, 60.00),
     "o1-mini": (3.00, 12.00),
     "o1": (15.00, 60.00),
+    "o3-mini": (1.10, 4.40),
+    "o4-mini": (1.10, 4.40),
 }
 
 # Default pricing for unknown models (conservative estimate)
@@ -130,7 +149,7 @@ def count_tokens(text: str, model: str = "claude-3-sonnet") -> int:
     model_lower = model.lower()
     
     # Try tiktoken for OpenAI models
-    if any(prefix in model_lower for prefix in ["gpt-", "o1", "davinci", "curie"]):
+    if any(prefix in model_lower for prefix in ["gpt-", "o1", "o3", "o4", "davinci", "curie"]):
         tiktoken_count = count_tokens_tiktoken(text, model)
         if tiktoken_count is not None:
             return tiktoken_count
