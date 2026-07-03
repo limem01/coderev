@@ -176,12 +176,29 @@ def get_model_pricing(model: str) -> tuple[float, float]:
     for key, value in MODEL_PRICING.items():
         if key.lower() == model_lower:
             return value
-    
-    # Check partial match for model families
-    for key, value in MODEL_PRICING.items():
-        if model_lower.startswith(key.lower().split("-")[0]):
-            return value
-    
+
+    # Longest-prefix match: a dated/suffixed model ID (e.g.
+    # "gpt-4o-2024-08-06" or "claude-sonnet-4-5-20260101") should resolve to
+    # the most specific known base model, not the first family that happens
+    # to share a provider prefix. Require the match to end on a token
+    # boundary ('-' or '.') so "gpt-4" doesn't swallow "gpt-45".
+    best_key: str | None = None
+    for key in MODEL_PRICING:
+        key_lower = key.lower()
+        if not model_lower.startswith(key_lower):
+            continue
+        boundary = model_lower[len(key_lower):len(key_lower) + 1]
+        if boundary and boundary not in "-.":
+            continue
+        if best_key is None or len(key_lower) > len(best_key):
+            best_key = key_lower
+
+    if best_key is not None:
+        # Return by exact (case-insensitive) key match found above.
+        for key, value in MODEL_PRICING.items():
+            if key.lower() == best_key:
+                return value
+
     return DEFAULT_PRICING
 
 

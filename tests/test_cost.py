@@ -124,6 +124,27 @@ class TestGetModelPricing:
         assert get_model_pricing("o3-mini") == (1.10, 4.40)
         assert get_model_pricing("o4-mini") == (1.10, 4.40)
 
+    def test_dated_suffix_resolves_to_most_specific_base(self):
+        """Dated/suffixed IDs must resolve to the most specific base model,
+        not the first family sharing a provider prefix (regression: these
+        previously all matched ``gpt-4`` / ``claude-3-opus`` pricing)."""
+        # gpt-4o family: must NOT fall back to the pricier gpt-4 (30/60).
+        assert get_model_pricing("gpt-4o-2024-08-06") == (2.50, 10.00)
+        assert get_model_pricing("gpt-4o-mini-2024-07-18") == (0.15, 0.60)
+        # gpt-4-turbo dated ID keeps turbo pricing, not base gpt-4.
+        assert get_model_pricing("gpt-4-turbo-2024-04-09") == (10.00, 30.00)
+        # Claude dated IDs resolve to their own tier, not opus.
+        assert get_model_pricing("claude-sonnet-4-20250514") == (3.00, 15.00)
+        assert get_model_pricing("o3-mini-2025-01-31") == (1.10, 4.40)
+
+    def test_longest_prefix_respects_token_boundary(self):
+        """Prefix matching must end on a '-'/'.' boundary so a shorter key
+        does not swallow an unrelated longer model name."""
+        # "gpt-4" is a string-prefix of "gpt-45x" but not a token match.
+        assert get_model_pricing("gpt-45x-model") == DEFAULT_PRICING
+        # A bare gpt-4 dated variant still resolves to gpt-4.
+        assert get_model_pricing("gpt-4-0613") == (30.00, 60.00)
+
 
 class TestCostEstimate:
     """Tests for CostEstimate dataclass."""
