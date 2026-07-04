@@ -11,6 +11,7 @@ from coderev.cost import (
     count_tokens,
     count_tokens_approximate,
     get_model_pricing,
+    is_known_model,
     MODEL_PRICING,
     DEFAULT_PRICING,
 )
@@ -144,6 +145,69 @@ class TestGetModelPricing:
         assert get_model_pricing("gpt-45x-model") == DEFAULT_PRICING
         # A bare gpt-4 dated variant still resolves to gpt-4.
         assert get_model_pricing("gpt-4-0613") == (30.00, 60.00)
+
+
+class TestIsKnownModel:
+    """Tests for is_known_model / DEFAULT_PRICING fallback detection."""
+
+    def test_exact_model_is_known(self):
+        assert is_known_model("claude-3-sonnet-20240229") is True
+
+    def test_alias_is_known(self):
+        assert is_known_model("gpt-4o") is True
+
+    def test_case_insensitive_is_known(self):
+        assert is_known_model("CLAUDE-3-SONNET") is True
+
+    def test_dated_prefix_variant_is_known(self):
+        # Resolves via longest-prefix match, so still counts as known.
+        assert is_known_model("gpt-4o-2024-08-06") is True
+        assert is_known_model("gpt-4-0613") is True
+
+    def test_unknown_model_is_not_known(self):
+        assert is_known_model("unknown-model-xyz") is False
+
+    def test_boundary_mismatch_is_not_known(self):
+        # "gpt-45x" is a string-prefix collision, not a real token match.
+        assert is_known_model("gpt-45x-model") is False
+
+    def test_known_model_with_default_priced_rates_still_known(self):
+        # gpt-4-turbo happens to be priced identically to DEFAULT_PRICING;
+        # it must still report as known (detection is not value-based).
+        assert get_model_pricing("gpt-4-turbo") == DEFAULT_PRICING
+        assert is_known_model("gpt-4-turbo") is True
+
+
+class TestPricingIsEstimatedFlag:
+    """Tests that CostEstimate carries the unknown-pricing warning flag."""
+
+    def test_known_model_not_estimated(self):
+        estimator = CostEstimator(model="gpt-4o")
+        assert estimator.pricing_is_estimated is False
+        estimate = estimator.estimate_code("print('hi')", language="python")
+        assert estimate.pricing_is_estimated is False
+
+    def test_unknown_model_is_estimated(self):
+        estimator = CostEstimator(model="totally-made-up-model")
+        assert estimator.pricing_is_estimated is True
+        estimate = estimator.estimate_code("print('hi')", language="python")
+        assert estimate.pricing_is_estimated is True
+
+    def test_estimate_diff_carries_flag(self):
+        estimator = CostEstimator(model="totally-made-up-model")
+        estimate = estimator.estimate_diff("+ added line\n- removed line")
+        assert estimate.pricing_is_estimated is True
+
+    def test_default_flag_is_false(self):
+        estimate = CostEstimate(
+            input_tokens=1,
+            estimated_output_tokens=1,
+            model="x",
+            input_cost_usd=0.0,
+            output_cost_usd=0.0,
+            total_cost_usd=0.0,
+        )
+        assert estimate.pricing_is_estimated is False
 
 
 class TestCostEstimate:

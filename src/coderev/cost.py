@@ -158,24 +158,26 @@ def count_tokens(text: str, model: str = "claude-3-sonnet") -> int:
     return count_tokens_approximate(text)
 
 
-def get_model_pricing(model: str) -> tuple[float, float]:
-    """Get pricing for a model.
-    
+def _resolve_pricing(model: str) -> tuple[tuple[float, float], bool]:
+    """Resolve pricing for a model.
+
     Args:
         model: Model name or alias.
-        
+
     Returns:
-        Tuple of (input_price_per_1m, output_price_per_1m) in USD.
+        Tuple of ((input_price_per_1m, output_price_per_1m), matched) where
+        ``matched`` is True if the model resolved to a known pricing entry and
+        False if it fell back to ``DEFAULT_PRICING``.
     """
     # Check exact match first
     if model in MODEL_PRICING:
-        return MODEL_PRICING[model]
-    
+        return MODEL_PRICING[model], True
+
     # Check case-insensitive
     model_lower = model.lower()
     for key, value in MODEL_PRICING.items():
         if key.lower() == model_lower:
-            return value
+            return value, True
 
     # Longest-prefix match: a dated/suffixed model ID (e.g.
     # "gpt-4o-2024-08-06" or "claude-sonnet-4-5-20260101") should resolve to
@@ -197,9 +199,39 @@ def get_model_pricing(model: str) -> tuple[float, float]:
         # Return by exact (case-insensitive) key match found above.
         for key, value in MODEL_PRICING.items():
             if key.lower() == best_key:
-                return value
+                return value, True
 
-    return DEFAULT_PRICING
+    return DEFAULT_PRICING, False
+
+
+def get_model_pricing(model: str) -> tuple[float, float]:
+    """Get pricing for a model.
+
+    Args:
+        model: Model name or alias.
+
+    Returns:
+        Tuple of (input_price_per_1m, output_price_per_1m) in USD. Unknown
+        models fall back to ``DEFAULT_PRICING``; use :func:`is_known_model` to
+        detect that case.
+    """
+    return _resolve_pricing(model)[0]
+
+
+def is_known_model(model: str) -> bool:
+    """Return True if ``model`` resolves to a known pricing entry.
+
+    When this returns False, cost estimates for the model use the conservative
+    ``DEFAULT_PRICING`` fallback and should be treated as a rough guess rather
+    than an accurate figure.
+
+    Args:
+        model: Model name or alias.
+
+    Returns:
+        True if pricing is known, False if the default fallback is used.
+    """
+    return _resolve_pricing(model)[1]
 
 
 @dataclass
@@ -214,7 +246,8 @@ class CostEstimate:
     total_cost_usd: float
     file_count: int = 1
     skipped_files: int = 0
-    
+    pricing_is_estimated: bool = False
+
     @property
     def total_tokens(self) -> int:
         """Total estimated tokens (input + output)."""
@@ -250,6 +283,9 @@ class CostEstimator:
         """
         self.model = model
         self.input_price, self.output_price = get_model_pricing(model)
+        # Whether pricing was resolved from a known model or fell back to
+        # DEFAULT_PRICING (in which case estimates are a rough guess).
+        self.pricing_is_estimated = not is_known_model(model)
     
     def estimate_code(
         self,
@@ -292,8 +328,9 @@ class CostEstimator:
             input_cost_usd=input_cost,
             output_cost_usd=output_cost,
             total_cost_usd=input_cost + output_cost,
+            pricing_is_estimated=self.pricing_is_estimated,
         )
-    
+
     def estimate_file(
         self,
         file_path: Path | str,
@@ -371,6 +408,7 @@ class CostEstimator:
             total_cost_usd=input_cost + output_cost,
             file_count=file_count,
             skipped_files=skipped_count,
+            pricing_is_estimated=self.pricing_is_estimated,
         )
     
     def estimate_diff(
@@ -405,8 +443,9 @@ class CostEstimator:
             input_cost_usd=input_cost,
             output_cost_usd=output_cost,
             total_cost_usd=input_cost + output_cost,
+            pricing_is_estimated=self.pricing_is_estimated,
         )
-    
+
     def _detect_language(self, file_path: Path) -> str | None:
         """Detect programming language from file extension."""
         extension_map = {

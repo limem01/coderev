@@ -98,6 +98,12 @@ def print_cost_estimate(estimate: "CostEstimate", console: Console) -> None:
     panel = Panel(table, title="[bold blue]Cost Estimate[/]", border_style="blue")
     console.print(panel)
 
+    if estimate.pricing_is_estimated:
+        console.print(
+            f"[yellow]Warning: pricing for '{estimate.model}' is unknown; "
+            "using default rates. This total is a rough estimate.[/]"
+        )
+
 
 @main.command()
 @click.argument("paths", nargs=-1, required=True)
@@ -822,6 +828,7 @@ def estimate(
                 "input_cost_usd": round(cost_estimate.input_cost_usd, 6),
                 "output_cost_usd": round(cost_estimate.output_cost_usd, 6),
                 "total_cost_usd": round(cost_estimate.total_cost_usd, 6),
+                "pricing_is_estimated": cost_estimate.pricing_is_estimated,
             }
             click.echo(json_module.dumps(result, indent=2))
         else:
