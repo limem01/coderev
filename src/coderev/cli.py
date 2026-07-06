@@ -780,6 +780,7 @@ def bpr(
 @click.option("--recursive", "-r", is_flag=True, help="Recursively review directories")
 @click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob)")
 @click.option("--model", "-m", help="Model to estimate costs for (overrides config)")
+@click.option("--max-cost", type=float, help="Fail (exit code 2) if the estimated total cost exceeds this USD budget")
 @click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
 def estimate(
     paths: tuple[str, ...],
@@ -787,17 +788,22 @@ def estimate(
     recursive: bool,
     exclude: tuple[str, ...],
     model: Optional[str],
+    max_cost: Optional[float],
     output_format: str,
 ) -> None:
     """Estimate review cost without running the review.
-    
+
     Shows token counts and estimated API costs for the specified files.
     Useful for budgeting and understanding costs before committing to a review.
-    
+
+    Use --max-cost to gate reviews in CI: the command exits with code 2 when
+    the estimated total cost exceeds the given USD budget.
+
     Examples:
         coderev estimate src/
         coderev estimate *.py --model gpt-4o
         coderev estimate . -r --exclude "*.test.py"
+        coderev estimate . -r --max-cost 0.50
     """
     import json as json_module
     from coderev.cost import CostEstimator
@@ -814,9 +820,16 @@ def estimate(
         focus_list = list(focus) if focus else None
         model_name = model or config.model
         
+        if max_cost is not None and max_cost < 0:
+            raise ValueError("--max-cost must be non-negative")
+
         estimator = CostEstimator(model=model_name)
         cost_estimate = estimator.estimate_files(files, focus=focus_list)
-        
+
+        over_budget = (
+            max_cost is not None and cost_estimate.exceeds_budget(max_cost)
+        )
+
         if output_format == "json":
             result = {
                 "model": cost_estimate.model,
@@ -830,10 +843,29 @@ def estimate(
                 "total_cost_usd": round(cost_estimate.total_cost_usd, 6),
                 "pricing_is_estimated": cost_estimate.pricing_is_estimated,
             }
+            if max_cost is not None:
+                result["max_cost_usd"] = max_cost
+                result["over_budget"] = over_budget
             click.echo(json_module.dumps(result, indent=2))
         else:
             print_cost_estimate(cost_estimate, console)
-    
+            if max_cost is not None:
+                if over_budget:
+                    console.print(
+                        f"[red]Over budget: estimated {cost_estimate.format_cost()} "
+                        f"exceeds --max-cost ${max_cost:.2f}[/]"
+                    )
+                else:
+                    console.print(
+                        f"[green]Within budget: estimated {cost_estimate.format_cost()} "
+                        f"<= --max-cost ${max_cost:.2f}[/]"
+                    )
+
+        if over_budget:
+            sys.exit(2)
+
+    except SystemExit:
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         sys.exit(1)

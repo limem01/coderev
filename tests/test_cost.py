@@ -326,6 +326,38 @@ class TestCostEstimate:
         assert estimate.format_tokens() == "2.50M"
 
 
+class TestExceedsBudget:
+    """Tests for CostEstimate.exceeds_budget."""
+
+    def _estimate(self, total: float) -> CostEstimate:
+        return CostEstimate(
+            input_tokens=1000,
+            estimated_output_tokens=500,
+            model="claude-3-sonnet",
+            input_cost_usd=total * 0.5,
+            output_cost_usd=total * 0.5,
+            total_cost_usd=total,
+        )
+
+    def test_under_budget(self):
+        assert self._estimate(0.10).exceeds_budget(0.50) is False
+
+    def test_over_budget(self):
+        assert self._estimate(0.75).exceeds_budget(0.50) is True
+
+    def test_equal_budget_is_not_over(self):
+        # Budget is inclusive: exactly at the limit is allowed.
+        assert self._estimate(0.50).exceeds_budget(0.50) is False
+
+    def test_zero_budget(self):
+        assert self._estimate(0.0001).exceeds_budget(0.0) is True
+        assert self._estimate(0.0).exceeds_budget(0.0) is False
+
+    def test_negative_budget_raises(self):
+        with pytest.raises(ValueError):
+            self._estimate(0.10).exceeds_budget(-1.0)
+
+
 class TestCostEstimator:
     """Tests for CostEstimator class."""
     

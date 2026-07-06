@@ -270,6 +270,26 @@ class CostEstimate:
     def total_tokens(self) -> int:
         """Total estimated tokens (input + output)."""
         return self.input_tokens + self.estimated_output_tokens
+
+    def exceeds_budget(self, max_cost_usd: float) -> bool:
+        """Return True if the estimated total cost exceeds a budget.
+
+        Useful for gating reviews in CI: fail the pipeline when a change is
+        large enough that reviewing it would cost more than allowed.
+
+        Args:
+            max_cost_usd: Maximum acceptable total cost in USD. Must be
+                non-negative.
+
+        Returns:
+            True if ``total_cost_usd`` is strictly greater than the budget.
+
+        Raises:
+            ValueError: If ``max_cost_usd`` is negative.
+        """
+        if max_cost_usd < 0:
+            raise ValueError("max_cost_usd must be non-negative")
+        return self.total_cost_usd > max_cost_usd
     
     def format_cost(self) -> str:
         """Format cost as human-readable string."""

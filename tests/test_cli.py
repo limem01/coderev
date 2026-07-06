@@ -249,3 +249,55 @@ class TestOutputFormats:
             assert result.exit_code == 0
             assert '"summary": "Test"' in result.output
             assert '"severity": "high"' in result.output
+
+
+class TestEstimateBudget:
+    """Tests for the `estimate --max-cost` budget gate."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    def test_within_budget_exits_zero(self, runner, tmp_path):
+        import json as json_module
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("a.py").write_text("def f():\n    return 1\n")
+            result = runner.invoke(
+                main,
+                ["estimate", "a.py", "--max-cost", "100", "--format", "json"],
+            )
+            assert result.exit_code == 0
+            data = json_module.loads(result.output)
+            assert data["over_budget"] is False
+            assert data["max_cost_usd"] == 100.0
+
+    def test_over_budget_exits_two(self, runner, tmp_path):
+        import json as json_module
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("a.py").write_text("def f():\n    return 1\n")
+            result = runner.invoke(
+                main,
+                ["estimate", "a.py", "--max-cost", "0", "--format", "json"],
+            )
+            assert result.exit_code == 2
+            data = json_module.loads(result.output)
+            assert data["over_budget"] is True
+
+    def test_negative_budget_errors(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("a.py").write_text("pass\n")
+            result = runner.invoke(main, ["estimate", "a.py", "--max-cost", "-1"])
+            assert result.exit_code == 1
+            assert "non-negative" in result.output
+
+    def test_no_max_cost_omits_budget_fields(self, runner, tmp_path):
+        import json as json_module
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("a.py").write_text("pass\n")
+            result = runner.invoke(
+                main, ["estimate", "a.py", "--format", "json"]
+            )
+            assert result.exit_code == 0
+            data = json_module.loads(result.output)
+            assert "over_budget" not in data
+            assert "max_cost_usd" not in data
