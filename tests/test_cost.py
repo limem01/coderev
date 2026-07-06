@@ -146,6 +146,33 @@ class TestGetModelPricing:
         # A bare gpt-4 dated variant still resolves to gpt-4.
         assert get_model_pricing("gpt-4-0613") == (30.00, 60.00)
 
+    def test_hyphenated_base_aliases(self):
+        """Anthropic uses hyphens in real IDs; date-less hyphenated aliases
+        must resolve to the correct tier (regression: only dotted aliases
+        like ``claude-3.5-sonnet`` existed)."""
+        assert get_model_pricing("claude-3-5-sonnet") == (3.00, 15.00)
+        assert get_model_pricing("claude-3-5-haiku") == (1.00, 5.00)
+        assert get_model_pricing("claude-3-7-sonnet") == (3.00, 15.00)
+        assert get_model_pricing("claude-opus-4-1") == (15.00, 75.00)
+        assert get_model_pricing("claude-haiku-4-5") == (1.00, 5.00)
+
+    def test_latest_suffix_resolves_to_base(self):
+        """Anthropic's moving ``-latest`` aliases must resolve to their base
+        tier's pricing, not fall back to DEFAULT_PRICING (regression: these
+        previously mis-priced to 10/30)."""
+        assert get_model_pricing("claude-3-5-sonnet-latest") == (3.00, 15.00)
+        assert get_model_pricing("claude-3-7-sonnet-latest") == (3.00, 15.00)
+        assert get_model_pricing("claude-3-5-haiku-latest") == (1.00, 5.00)
+        assert get_model_pricing("claude-opus-4-1-latest") == (15.00, 75.00)
+        # -latest forms are recognized as known, not estimated guesses.
+        assert is_known_model("claude-3-5-sonnet-latest") is True
+        assert is_known_model("claude-3-5-haiku-latest") is True
+
+    def test_unknown_latest_still_falls_back(self):
+        """A ``-latest`` on an unknown base must not spuriously resolve."""
+        assert get_model_pricing("totally-unknown-latest") == DEFAULT_PRICING
+        assert is_known_model("totally-unknown-latest") is False
+
 
 class TestIsKnownModel:
     """Tests for is_known_model / DEFAULT_PRICING fallback detection."""

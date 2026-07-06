@@ -37,10 +37,17 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-3.5-sonnet": (3.00, 15.00),
     "claude-3.5-haiku": (1.00, 5.00),
     "claude-3.7-sonnet": (3.00, 15.00),
+    # Hyphenated base aliases (match Anthropic's real ID convention so that
+    # date-less and "-latest" forms resolve, e.g. "claude-3-5-sonnet-latest").
+    "claude-3-5-sonnet": (3.00, 15.00),
+    "claude-3-5-haiku": (1.00, 5.00),
+    "claude-3-7-sonnet": (3.00, 15.00),
     "claude-opus-4": (15.00, 75.00),
     "claude-opus-4.1": (15.00, 75.00),
+    "claude-opus-4-1": (15.00, 75.00),
     "claude-sonnet-4": (3.00, 15.00),
     "claude-haiku-4.5": (1.00, 5.00),
+    "claude-haiku-4-5": (1.00, 5.00),
     # OpenAI models
     "gpt-4": (30.00, 60.00),
     "gpt-4-turbo": (10.00, 30.00),
@@ -178,6 +185,17 @@ def _resolve_pricing(model: str) -> tuple[tuple[float, float], bool]:
     for key, value in MODEL_PRICING.items():
         if key.lower() == model_lower:
             return value, True
+
+    # Anthropic publishes moving "-latest" aliases (e.g.
+    # "claude-3-5-sonnet-latest"). Strip a trailing "-latest" and resolve the
+    # underlying base model so pricing stays accurate instead of falling back
+    # to DEFAULT_PRICING.
+    if model_lower.endswith("-latest"):
+        base = model[: -len("-latest")]
+        if base:
+            resolved, matched = _resolve_pricing(base)
+            if matched:
+                return resolved, True
 
     # Longest-prefix match: a dated/suffixed model ID (e.g.
     # "gpt-4o-2024-08-06" or "claude-sonnet-4-5-20260101") should resolve to
