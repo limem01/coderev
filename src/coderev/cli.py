@@ -86,7 +86,7 @@ def print_cost_estimate(estimate: "CostEstimate", console: Console) -> None:
     table.add_column("Label", style="dim")
     table.add_column("Value", style="bold")
     
-    table.add_row("Model", estimate.model)
+    table.add_row("Model", estimate.model + (" [dim](batch 50% rate)[/]" if estimate.batch_mode else ""))
     table.add_row("Files", f"{estimate.file_count}" + (f" ({estimate.skipped_files} skipped)" if estimate.skipped_files else ""))
     table.add_row("Input tokens", f"{estimate.input_tokens:,}")
     table.add_row("Est. output tokens", f"{estimate.estimated_output_tokens:,}")
@@ -781,6 +781,7 @@ def bpr(
 @click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob)")
 @click.option("--model", "-m", help="Model to estimate costs for (overrides config)")
 @click.option("--max-cost", type=float, help="Fail (exit code 2) if the estimated total cost exceeds this USD budget")
+@click.option("--batch", is_flag=True, help="Estimate at the 50% Batch API rate (Anthropic Message Batches / OpenAI Batch API)")
 @click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
 def estimate(
     paths: tuple[str, ...],
@@ -789,6 +790,7 @@ def estimate(
     exclude: tuple[str, ...],
     model: Optional[str],
     max_cost: Optional[float],
+    batch: bool,
     output_format: str,
 ) -> None:
     """Estimate review cost without running the review.
@@ -804,6 +806,7 @@ def estimate(
         coderev estimate *.py --model gpt-4o
         coderev estimate . -r --exclude "*.test.py"
         coderev estimate . -r --max-cost 0.50
+        coderev estimate . -r --batch --max-cost 0.25
     """
     import json as json_module
     from coderev.cost import CostEstimator
@@ -823,7 +826,7 @@ def estimate(
         if max_cost is not None and max_cost < 0:
             raise ValueError("--max-cost must be non-negative")
 
-        estimator = CostEstimator(model=model_name)
+        estimator = CostEstimator(model=model_name, batch_mode=batch)
         cost_estimate = estimator.estimate_files(files, focus=focus_list)
 
         over_budget = (
@@ -842,6 +845,7 @@ def estimate(
                 "output_cost_usd": round(cost_estimate.output_cost_usd, 6),
                 "total_cost_usd": round(cost_estimate.total_cost_usd, 6),
                 "pricing_is_estimated": cost_estimate.pricing_is_estimated,
+                "batch_mode": cost_estimate.batch_mode,
             }
             if max_cost is not None:
                 result["max_cost_usd"] = max_cost

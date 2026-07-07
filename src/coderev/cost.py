@@ -70,6 +70,11 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 # Default pricing for unknown models (conservative estimate)
 DEFAULT_PRICING = (10.00, 30.00)
 
+# Both Anthropic (Message Batches) and OpenAI (Batch API) charge 50% of the
+# standard per-token rate for asynchronous batch requests. Reviews that don't
+# need a synchronous result can be gated/budgeted at this reduced rate.
+BATCH_DISCOUNT = 0.5
+
 # Average characters per token (approximation)
 # Claude uses ~3.5-4 chars/token for English code
 # GPT models use ~4 chars/token
@@ -265,6 +270,7 @@ class CostEstimate:
     file_count: int = 1
     skipped_files: int = 0
     pricing_is_estimated: bool = False
+    batch_mode: bool = False
 
     @property
     def total_tokens(self) -> int:
@@ -313,14 +319,22 @@ class CostEstimate:
 class CostEstimator:
     """Estimates API costs before running reviews."""
     
-    def __init__(self, model: str = "claude-3-sonnet"):
+    def __init__(self, model: str = "claude-3-sonnet", batch_mode: bool = False):
         """Initialize the cost estimator.
-        
+
         Args:
             model: Model name to estimate costs for.
+            batch_mode: If True, apply the asynchronous Batch API discount
+                (:data:`BATCH_DISCOUNT`) to both input and output rates. Use
+                this to budget reviews that will be submitted via Anthropic
+                Message Batches or the OpenAI Batch API.
         """
         self.model = model
+        self.batch_mode = batch_mode
         self.input_price, self.output_price = get_model_pricing(model)
+        if batch_mode:
+            self.input_price *= BATCH_DISCOUNT
+            self.output_price *= BATCH_DISCOUNT
         # Whether pricing was resolved from a known model or fell back to
         # DEFAULT_PRICING (in which case estimates are a rough guess).
         self.pricing_is_estimated = not is_known_model(model)
@@ -367,6 +381,7 @@ class CostEstimator:
             output_cost_usd=output_cost,
             total_cost_usd=input_cost + output_cost,
             pricing_is_estimated=self.pricing_is_estimated,
+            batch_mode=self.batch_mode,
         )
 
     def estimate_file(
@@ -447,6 +462,7 @@ class CostEstimator:
             file_count=file_count,
             skipped_files=skipped_count,
             pricing_is_estimated=self.pricing_is_estimated,
+            batch_mode=self.batch_mode,
         )
     
     def estimate_diff(
@@ -482,6 +498,7 @@ class CostEstimator:
             output_cost_usd=output_cost,
             total_cost_usd=input_cost + output_cost,
             pricing_is_estimated=self.pricing_is_estimated,
+            batch_mode=self.batch_mode,
         )
 
     def _detect_language(self, file_path: Path) -> str | None:

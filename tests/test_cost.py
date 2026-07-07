@@ -14,6 +14,7 @@ from coderev.cost import (
     is_known_model,
     MODEL_PRICING,
     DEFAULT_PRICING,
+    BATCH_DISCOUNT,
 )
 
 
@@ -521,3 +522,66 @@ class TestModelPricingCoverage:
         for model in models:
             # Check that the model is explicitly in MODEL_PRICING
             assert model in MODEL_PRICING or model.lower() in [k.lower() for k in MODEL_PRICING], f"Missing pricing for {model}"
+
+
+class TestBatchMode:
+    """Tests for the Batch API discounted-rate estimation."""
+
+    def test_batch_discount_is_half(self):
+        assert BATCH_DISCOUNT == 0.5
+
+    def test_default_estimator_is_not_batch(self):
+        estimator = CostEstimator(model="claude-3-sonnet")
+        assert estimator.batch_mode is False
+
+    def test_batch_mode_halves_rates(self):
+        std = CostEstimator(model="claude-3-sonnet")
+        batch = CostEstimator(model="claude-3-sonnet", batch_mode=True)
+        assert batch.batch_mode is True
+        assert batch.input_price == pytest.approx(std.input_price * BATCH_DISCOUNT)
+        assert batch.output_price == pytest.approx(std.output_price * BATCH_DISCOUNT)
+
+    def test_batch_mode_halves_estimated_cost(self):
+        code = "def add(a, b):\n    return a + b\n" * 20
+        std = CostEstimator(model="claude-3-sonnet").estimate_code(code)
+        batch = CostEstimator(model="claude-3-sonnet", batch_mode=True).estimate_code(code)
+        # Same token counts, but half the cost.
+        assert batch.input_tokens == std.input_tokens
+        assert batch.estimated_output_tokens == std.estimated_output_tokens
+        assert batch.total_cost_usd == pytest.approx(std.total_cost_usd * BATCH_DISCOUNT)
+
+    def test_batch_flag_propagates_to_estimate(self):
+        code = "print('hi')\n"
+        estimate = CostEstimator(model="gpt-4o", batch_mode=True).estimate_code(code)
+        assert estimate.batch_mode is True
+
+    def test_batch_flag_propagates_to_estimate_diff(self):
+        diff = "+ added line\n- removed line\n"
+        estimate = CostEstimator(model="claude-3-sonnet", batch_mode=True).estimate_diff(diff)
+        assert estimate.batch_mode is True
+
+    def test_batch_flag_propagates_to_estimate_files(self, tmp_path):
+        f = tmp_path / "sample.py"
+        f.write_text("def f():\n    return 1\n", encoding="utf-8")
+        estimate = CostEstimator(model="claude-3-sonnet", batch_mode=True).estimate_files([f])
+        assert estimate.batch_mode is True
+
+    def test_batch_mode_helps_stay_under_budget(self):
+        """A review over budget at the standard rate can pass at the batch rate."""
+        code = "x = 1\n" * 500
+        std = CostEstimator(model="claude-3-opus").estimate_code(code)
+        batch = CostEstimator(model="claude-3-opus", batch_mode=True).estimate_code(code)
+        budget = (std.total_cost_usd + batch.total_cost_usd) / 2
+        assert std.exceeds_budget(budget) is True
+        assert batch.exceeds_budget(budget) is False
+
+    def test_cost_estimate_batch_mode_defaults_false(self):
+        estimate = CostEstimate(
+            input_tokens=10,
+            estimated_output_tokens=5,
+            model="claude-3-sonnet",
+            input_cost_usd=0.0,
+            output_cost_usd=0.0,
+            total_cost_usd=0.0,
+        )
+        assert estimate.batch_mode is False
