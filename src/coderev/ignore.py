@@ -333,18 +333,19 @@ class CodeRevIgnore:
         if anchored:
             return self._matches_globstar(pattern, path_str)
 
-        # Handle directory patterns (ending with /)
+        # Handle directory patterns (ending with /). An unanchored directory
+        # pattern has no internal separator (an internal '/' would have anchored
+        # it), so its name must match a single path *segment*. Matching each
+        # segment individually keeps the match "at any depth" while stopping a
+        # wildcard from crossing '/': ``foo*bar/`` matches ``a/fooXbar/y`` but
+        # not ``foo/x/bar/z``, mirroring gitignore's FNM_PATHNAME semantics.
         if pattern.endswith("/"):
             dir_pattern = pattern.rstrip("/")
-            # Match path segments (e.g. /node_modules/ anywhere in the path)
-            if f"/{dir_pattern}/" in path_str_padded:
-                return True
-            # Fallback glob matching
-            if fnmatch.fnmatch(path_str, f"*/{dir_pattern}/*"):
-                return True
-            if fnmatch.fnmatch(path_str, f"{dir_pattern}/*"):
-                return True
-            return False
+            return any(
+                fnmatch.fnmatch(seg, dir_pattern)
+                for seg in path_str.split("/")
+                if seg
+            )
 
         # Regular glob matching. An unanchored pattern with no separator matches
         # "at any level" (gitignore semantics), but its ``*``/``?`` must not
@@ -386,20 +387,17 @@ class CodeRevIgnore:
             return lambda ps, _pp: regex.match(ps) is not None
 
         # Directory patterns (ending with '/') match a path segment anywhere.
+        # Match each segment individually so the pattern applies at any depth
+        # while its wildcards never cross '/' (see :meth:`_matches`).
         if pattern.endswith("/"):
             dir_pattern = pattern.rstrip("/")
-            segment = f"/{dir_pattern}/"
-            glob_mid = f"*/{dir_pattern}/*"
-            glob_lead = f"{dir_pattern}/*"
 
-            def _dir_match(ps: str, pp: str) -> bool:
-                if segment in pp:
-                    return True
-                if fnmatch.fnmatch(ps, glob_mid):
-                    return True
-                if fnmatch.fnmatch(ps, glob_lead):
-                    return True
-                return False
+            def _dir_match(ps: str, _pp: str) -> bool:
+                return any(
+                    fnmatch.fnmatch(seg, dir_pattern)
+                    for seg in ps.split("/")
+                    if seg
+                )
 
             return _dir_match
 

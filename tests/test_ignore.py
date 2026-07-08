@@ -163,6 +163,25 @@ src\\generated\\
         assert ignore.should_ignore("reports/output.js") is True
         assert ignore.should_ignore("src/reports/output.js") is True
 
+    def test_wildcard_in_directory_pattern_does_not_cross_separator(self):
+        """A '*' in an unanchored directory pattern stays within one segment.
+
+        ``foo*bar/`` must match a single directory segment named like
+        ``fooXbar`` at any depth, but must not let ``*`` span ``/`` (so it does
+        not match ``foo/x/bar/z``), mirroring gitignore's FNM_PATHNAME rule.
+        """
+        ignore = CodeRevIgnore(patterns=["foo*bar/"])
+        assert ignore.should_ignore("a/fooXbar/y") is True
+        assert ignore.should_ignore("fooXbar/y") is True
+        assert ignore.should_ignore("foo/x/bar/z") is False
+
+    def test_question_mark_in_directory_pattern_does_not_cross_separator(self):
+        """A '?' in a directory pattern matches one non-separator char only."""
+        ignore = CodeRevIgnore(patterns=["a?c/"])
+        assert ignore.should_ignore("abc/z") is True
+        assert ignore.should_ignore("x/abc/z") is True
+        assert ignore.should_ignore("a/c/z") is False
+
     def test_leading_slash_anchors_file_glob_to_root(self):
         """An anchored file glob keeps '*' within the top-level segment."""
         ignore = CodeRevIgnore(patterns=["/*.tmp"])
