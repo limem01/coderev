@@ -19,6 +19,11 @@ def _globstar_to_regex(pattern: str) -> str:
     * ``**/`` matches zero or more leading directories, so ``docs/**/*.md``
       matches both ``docs/x.md`` and ``docs/a/b.md``.
     * a trailing ``/**`` matches everything underneath a directory.
+    * a ``/**/`` in the middle matches zero or more directories.
+    * ``**`` that is *not* bounded by ``/`` (or the pattern boundary) is treated
+      as regular asterisks and does not cross ``/`` -- gitignore: "other
+      consecutive asterisks are considered regular asterisks". So ``a**b``
+      matches ``axxb`` but not ``ax/yb``.
     * ``*`` and ``?`` never cross ``/``.
     * ``[...]`` character classes (including ranges like ``[a-z]`` and negations
       like ``[!0-9]``) match a single character, mirroring gitignore.
@@ -54,14 +59,25 @@ def _globstar_to_regex(pattern: str) -> str:
             continue
         if c == "*":
             if i + 1 < n and pattern[i + 1] == "*":
+                # ``**`` is only special when bounded by ``/`` or the pattern
+                # boundary; otherwise gitignore treats it as regular asterisks.
+                prev_boundary = i == 0 or pattern[i - 1] == "/"
                 j = i + 2
-                if j < n and pattern[j] == "/":
-                    # '**/' -> zero or more directory segments
+                next_slash = j < n and pattern[j] == "/"
+                next_end = j == n
+                if prev_boundary and next_slash:
+                    # leading '**/' or middle '/**/' -> zero or more dir segments
                     out.append("(?:.*/)?")
                     i = j + 1
                     continue
-                # trailing or bare '**' -> anything (including separators)
-                out.append(".*")
+                if prev_boundary and next_end:
+                    # trailing '/**' (or a bare '**' pattern) -> anything,
+                    # including separators
+                    out.append(".*")
+                    i = j
+                    continue
+                # '**' not bounded by '/' -> regular asterisks, stay in-segment
+                out.append("[^/]*")
                 i = j
                 continue
             # single '*' -> anything within a segment
