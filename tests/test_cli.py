@@ -301,3 +301,49 @@ class TestEstimateBudget:
             data = json_module.loads(result.output)
             assert "over_budget" not in data
             assert "max_cost_usd" not in data
+
+
+class TestEstimatePerFile:
+    """Tests for the `estimate --per-file` breakdown."""
+
+    @pytest.fixture
+    def runner(self):
+        return CliRunner()
+
+    def test_per_file_json_lists_each_file(self, runner, tmp_path):
+        import json as json_module
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("small.py").write_text("x = 1\n")
+            Path("big.py").write_text("y = 2\n" * 300)
+            result = runner.invoke(
+                main,
+                ["estimate", "small.py", "big.py", "--per-file", "--format", "json"],
+            )
+            assert result.exit_code == 0
+            data = json_module.loads(result.output)
+            assert "per_file" in data
+            assert len(data["per_file"]) == 2
+            paths = [item["path"] for item in data["per_file"]]
+            assert "small.py" in paths and "big.py" in paths
+            # Most expensive first.
+            costs = [item["total_cost_usd"] for item in data["per_file"]]
+            assert costs == sorted(costs, reverse=True)
+
+    def test_no_per_file_omits_breakdown(self, runner, tmp_path):
+        import json as json_module
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("a.py").write_text("pass\n")
+            result = runner.invoke(
+                main, ["estimate", "a.py", "--format", "json"]
+            )
+            assert result.exit_code == 0
+            data = json_module.loads(result.output)
+            assert "per_file" not in data
+
+    def test_per_file_rich_output_shows_files(self, runner, tmp_path):
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            Path("alpha.py").write_text("def a(): pass\n")
+            result = runner.invoke(main, ["estimate", "alpha.py", "--per-file"])
+            assert result.exit_code == 0
+            assert "Per-file breakdown" in result.output
+            assert "alpha.py" in result.output

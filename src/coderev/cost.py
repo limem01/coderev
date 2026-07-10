@@ -271,6 +271,12 @@ class CostEstimate:
     skipped_files: int = 0
     pricing_is_estimated: bool = False
     batch_mode: bool = False
+    # Path this estimate is for, when it represents a single file.
+    path: str | None = None
+    # Per-file estimates when this is an aggregate produced with
+    # ``estimate_files(..., detailed=True)``. ``None`` for single-file or
+    # non-detailed estimates so existing callers are unaffected.
+    file_breakdown: list["CostEstimate"] | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -412,22 +418,31 @@ class CostEstimator:
         
         code = file_path.read_text(encoding="utf-8")
         language = self._detect_language(file_path)
-        
-        return self.estimate_code(code, language, focus, context=str(file_path))
+
+        estimate = self.estimate_code(code, language, focus, context=str(file_path))
+        # Record which file this single-file estimate is for so aggregate
+        # breakdowns can attribute cost per path.
+        estimate.path = str(file_path)
+        return estimate
     
     def estimate_files(
         self,
         file_paths: Sequence[Path | str],
         focus: list[str] | None = None,
+        detailed: bool = False,
     ) -> CostEstimate:
         """Estimate total cost for reviewing multiple files.
-        
+
         Binary files are automatically skipped.
-        
+
         Args:
             file_paths: List of file paths.
             focus: List of focus areas (optional).
-            
+            detailed: When True, attach a per-file breakdown to the returned
+                aggregate's ``file_breakdown`` (sorted by descending total
+                cost) so callers can see which files dominate the estimate.
+                The per-file estimates sum to the aggregate totals.
+
         Returns:
             Combined CostEstimate for all files.
         """
@@ -435,23 +450,34 @@ class CostEstimator:
         total_output_tokens = 0
         file_count = 0
         skipped_count = 0
-        
+        per_file: list[CostEstimate] = []
+
         for path in file_paths:
             path = Path(path)
-            
+
             try:
                 estimate = self.estimate_file(path, focus)
                 total_input_tokens += estimate.input_tokens
                 total_output_tokens += estimate.estimated_output_tokens
                 file_count += 1
+                if detailed:
+                    per_file.append(estimate)
             except (FileNotFoundError, ValueError, UnicodeDecodeError):
                 skipped_count += 1
                 continue
-        
+
         # Calculate total costs
         input_cost = (total_input_tokens / 1_000_000) * self.input_price
         output_cost = (total_output_tokens / 1_000_000) * self.output_price
-        
+
+        breakdown: list[CostEstimate] | None = None
+        if detailed:
+            # Most expensive files first so budgeting attention goes where it
+            # matters; ties keep input order (Python sort is stable).
+            breakdown = sorted(
+                per_file, key=lambda e: e.total_cost_usd, reverse=True
+            )
+
         return CostEstimate(
             input_tokens=total_input_tokens,
             estimated_output_tokens=total_output_tokens,
@@ -463,6 +489,7 @@ class CostEstimator:
             skipped_files=skipped_count,
             pricing_is_estimated=self.pricing_is_estimated,
             batch_mode=self.batch_mode,
+            file_breakdown=breakdown,
         )
     
     def estimate_diff(

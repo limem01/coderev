@@ -585,3 +585,89 @@ class TestBatchMode:
             total_cost_usd=0.0,
         )
         assert estimate.batch_mode is False
+
+
+class TestPerFileBreakdown:
+    """Tests for the detailed per-file cost breakdown."""
+
+    def test_no_breakdown_by_default(self, tmp_path):
+        """Aggregate estimates carry no breakdown unless requested."""
+        f = tmp_path / "a.py"
+        f.write_text("def a(): pass", encoding="utf-8")
+        estimate = CostEstimator().estimate_files([f])
+        assert estimate.file_breakdown is None
+
+    def test_detailed_populates_breakdown(self, tmp_path):
+        """detailed=True attaches one entry per reviewed file, each with a path."""
+        f1 = tmp_path / "small.py"
+        f1.write_text("x = 1\n", encoding="utf-8")
+        f2 = tmp_path / "big.py"
+        f2.write_text("y = 2\n" * 300, encoding="utf-8")
+
+        estimate = CostEstimator().estimate_files([f1, f2], detailed=True)
+
+        assert estimate.file_breakdown is not None
+        assert len(estimate.file_breakdown) == 2
+        paths = {item.path for item in estimate.file_breakdown}
+        assert str(f1) in paths and str(f2) in paths
+        for item in estimate.file_breakdown:
+            assert item.input_tokens > 0
+
+    def test_breakdown_sorted_by_cost_desc(self, tmp_path):
+        """Most expensive file comes first."""
+        small = tmp_path / "small.py"
+        small.write_text("x = 1\n", encoding="utf-8")
+        big = tmp_path / "big.py"
+        big.write_text("y = 2\n" * 300, encoding="utf-8")
+
+        estimate = CostEstimator().estimate_files([small, big], detailed=True)
+
+        costs = [item.total_cost_usd for item in estimate.file_breakdown]
+        assert costs == sorted(costs, reverse=True)
+        assert estimate.file_breakdown[0].path == str(big)
+
+    def test_breakdown_sums_to_aggregate(self, tmp_path):
+        """Per-file token/cost totals reconcile with the aggregate."""
+        files = []
+        for i in range(3):
+            f = tmp_path / f"f{i}.py"
+            f.write_text(f"def f{i}(): return {i}\n" * (i + 1), encoding="utf-8")
+            files.append(f)
+
+        estimate = CostEstimator().estimate_files(files, detailed=True)
+
+        assert (
+            sum(item.input_tokens for item in estimate.file_breakdown)
+            == estimate.input_tokens
+        )
+        assert estimate.total_cost_usd == pytest.approx(
+            sum(item.total_cost_usd for item in estimate.file_breakdown)
+        )
+
+    def test_breakdown_excludes_skipped_binary(self, tmp_path):
+        """Skipped binary files do not appear in the breakdown."""
+        code = tmp_path / "code.py"
+        code.write_text("def hello(): pass", encoding="utf-8")
+        binary = tmp_path / "image.png"
+        binary.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        estimate = CostEstimator().estimate_files([code, binary], detailed=True)
+
+        assert estimate.file_count == 1
+        assert estimate.skipped_files == 1
+        assert len(estimate.file_breakdown) == 1
+        assert estimate.file_breakdown[0].path == str(code)
+
+    def test_estimate_file_records_path(self, tmp_path):
+        """A single-file estimate records its own path."""
+        f = tmp_path / "solo.py"
+        f.write_text("def solo(): pass", encoding="utf-8")
+        estimate = CostEstimator().estimate_file(f)
+        assert estimate.path == str(f)
+
+    def test_breakdown_respects_batch_mode(self, tmp_path):
+        """Per-file entries inherit the batch flag/rate of the estimator."""
+        f = tmp_path / "a.py"
+        f.write_text("def a(): pass", encoding="utf-8")
+        estimate = CostEstimator(batch_mode=True).estimate_files([f], detailed=True)
+        assert estimate.file_breakdown[0].batch_mode is True

@@ -98,6 +98,19 @@ def print_cost_estimate(estimate: "CostEstimate", console: Console) -> None:
     panel = Panel(table, title="[bold blue]Cost Estimate[/]", border_style="blue")
     console.print(panel)
 
+    if estimate.file_breakdown:
+        breakdown = Table(title="[bold]Per-file breakdown[/]", box=None, padding=(0, 2))
+        breakdown.add_column("File", style="cyan", overflow="fold")
+        breakdown.add_column("Input tokens", justify="right", style="dim")
+        breakdown.add_column("Cost", justify="right", style="bold")
+        for item in estimate.file_breakdown:
+            breakdown.add_row(
+                item.path or "(unknown)",
+                f"{item.input_tokens:,}",
+                item.format_cost(),
+            )
+        console.print(breakdown)
+
     if estimate.pricing_is_estimated:
         console.print(
             f"[yellow]Warning: pricing for '{estimate.model}' is unknown; "
@@ -782,6 +795,7 @@ def bpr(
 @click.option("--model", "-m", help="Model to estimate costs for (overrides config)")
 @click.option("--max-cost", type=float, help="Fail (exit code 2) if the estimated total cost exceeds this USD budget")
 @click.option("--batch", is_flag=True, help="Estimate at the 50% Batch API rate (Anthropic Message Batches / OpenAI Batch API)")
+@click.option("--per-file", is_flag=True, help="Show a per-file cost breakdown (most expensive first)")
 @click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
 def estimate(
     paths: tuple[str, ...],
@@ -791,6 +805,7 @@ def estimate(
     model: Optional[str],
     max_cost: Optional[float],
     batch: bool,
+    per_file: bool,
     output_format: str,
 ) -> None:
     """Estimate review cost without running the review.
@@ -807,6 +822,7 @@ def estimate(
         coderev estimate . -r --exclude "*.test.py"
         coderev estimate . -r --max-cost 0.50
         coderev estimate . -r --batch --max-cost 0.25
+        coderev estimate src/ --per-file
     """
     import json as json_module
     from coderev.cost import CostEstimator
@@ -827,7 +843,9 @@ def estimate(
             raise ValueError("--max-cost must be non-negative")
 
         estimator = CostEstimator(model=model_name, batch_mode=batch)
-        cost_estimate = estimator.estimate_files(files, focus=focus_list)
+        cost_estimate = estimator.estimate_files(
+            files, focus=focus_list, detailed=per_file
+        )
 
         over_budget = (
             max_cost is not None and cost_estimate.exceeds_budget(max_cost)
@@ -850,6 +868,16 @@ def estimate(
             if max_cost is not None:
                 result["max_cost_usd"] = max_cost
                 result["over_budget"] = over_budget
+            if cost_estimate.file_breakdown is not None:
+                result["per_file"] = [
+                    {
+                        "path": item.path,
+                        "input_tokens": item.input_tokens,
+                        "estimated_output_tokens": item.estimated_output_tokens,
+                        "total_cost_usd": round(item.total_cost_usd, 6),
+                    }
+                    for item in cost_estimate.file_breakdown
+                ]
             click.echo(json_module.dumps(result, indent=2))
         else:
             print_cost_estimate(cost_estimate, console)
