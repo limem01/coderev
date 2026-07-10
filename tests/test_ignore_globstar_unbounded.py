@@ -31,9 +31,13 @@ class TestUnboundedGlobstar:
         assert not _match("**foo", "a/xfoo")
 
     def test_trailing_double_star_without_slash_is_regular(self):
-        # 'foo**' -> 'foo*', in-segment only.
+        # 'foo**' -> 'foo*', in-segment only (see the translation test below).
         assert _match("foo**", "foobar")
-        assert not _match("foo**", "foo/bar")
+        # 'foo*' does not match a segment that lacks the 'foo' prefix.
+        assert not _match("foo**", "xfoo")
+        # But like gitignore, 'foo' matches the *directory* 'foo', so everything
+        # under it is ignored too (verified against real ``git check-ignore``).
+        assert _match("foo**", "foo/bar")
 
     def test_double_star_before_slash_without_prev_boundary_is_regular(self):
         # 'a**/b': the '**' is not preceded by a boundary, so it is regular.
@@ -50,7 +54,9 @@ class TestBoundedGlobstarStillWorks:
         assert _match("a/**/b", "a/b")
         assert _match("a/**/b", "a/x/b")
         assert _match("a/**/b", "a/x/y/b")
-        assert not _match("a/**/b", "a/b/c")
+        # 'a/b' is a matched *directory*, so gitignore ignores its contents too
+        # (verified against real ``git check-ignore``).
+        assert _match("a/**/b", "a/b/c")
 
     def test_trailing_globstar_matches_everything_under(self):
         assert _match("foo/**", "foo/x")

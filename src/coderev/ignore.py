@@ -383,7 +383,11 @@ class CodeRevIgnore:
             body = pattern.rstrip("/")
             regex = "^" + _globstar_to_regex(body) + "(?:/.*)?$"
         else:
-            regex = "^" + _globstar_to_regex(pattern) + "$"
+            # No trailing slash: gitignore matches both files and directories,
+            # and when the match is a directory everything under it is ignored
+            # too. So allow an optional ``/...`` suffix -- ``/build`` matches
+            # ``build`` and ``build/foo.py`` alike, exactly like ``git`` does.
+            regex = "^" + _globstar_to_regex(pattern) + "(?:/.*)?$"
         return re.compile(regex)
 
     def _matches_globstar(self, pattern: str, path_str: str) -> bool:
