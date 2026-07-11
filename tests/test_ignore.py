@@ -204,10 +204,22 @@ src\\generated\\
         # The later ignore should take precedence
         assert ignore.should_ignore("important.log") is True
 
-    def test_negation_patterns_work_with_directories(self):
+    def test_negation_cannot_reinclude_under_excluded_directory(self):
+        # gitignore: "It is not possible to re-include a file if a parent
+        # directory of that file is excluded." ``build/`` excludes the
+        # directory itself, so the ``!build/keep.txt`` negation is void.
         ignore = CodeRevIgnore(patterns=["build/", "!build/keep.txt"])
         assert ignore.should_ignore("build/output.js") is True
-        assert ignore.should_ignore("build/keep.txt") is False
+        assert ignore.should_ignore("build/keep.txt") is True
+
+    def test_negation_reincludes_when_only_contents_excluded(self):
+        # ``generated/*`` excludes the *contents* of the directory, not the
+        # directory itself, so a file-level negation can still re-include a
+        # path. (Uses a non-default dir name so DEFAULT_IGNORE_PATTERNS'
+        # ``build/`` doesn't independently exclude the directory.)
+        ignore = CodeRevIgnore(patterns=["generated/*", "!generated/keep.txt"])
+        assert ignore.should_ignore("generated/output.js") is True
+        assert ignore.should_ignore("generated/keep.txt") is False
 
 
 class TestGlobstarPatterns:

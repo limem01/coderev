@@ -460,17 +460,40 @@ class CodeRevIgnore:
 
         Supports negation patterns prefixed with '!'. Like gitignore semantics,
         patterns are evaluated top-to-bottom and the last matching rule wins.
+
+        Follows gitignore's parent-directory rule: "It is not possible to
+        re-include a file if a parent directory of that file is excluded." We
+        therefore evaluate every ancestor directory prefix from the top down;
+        once a directory prefix is excluded, everything beneath it stays
+        ignored regardless of later ``!`` negations that would otherwise match
+        the file. This is what makes ``build/`` + ``!build/keep.txt`` keep
+        ``build/keep.txt`` ignored (the directory itself is excluded), while
+        ``build/*`` + ``!build/keep.txt`` still re-includes it (the ``build``
+        directory is never excluded, only its contents).
         """
         path_str = self._normalize_path(path)
-        # Make directory-segment checks robust by ensuring separators at ends.
-        path_str_padded = f"/{path_str.strip('/')}/"
+        if not path_str:
+            return False
 
-        # Patterns are compiled once and cached; the last matching rule wins so
-        # negations can re-include paths excluded by an earlier rule.
+        segments = [s for s in path_str.split("/") if s]
+        rules = self._compiled_patterns()
+
         ignored = False
-        for matcher, negated in self._compiled_patterns():
-            if matcher(path_str, path_str_padded):
-                ignored = not negated
+        prefix_parts: list[str] = []
+        for seg in segments:
+            prefix_parts.append(seg)
+            if ignored:
+                # A parent directory is already excluded; gitignore forbids
+                # re-including anything beneath it, so short-circuit and keep
+                # the whole subtree ignored.
+                return True
+            prefix = "/".join(prefix_parts)
+            # The second matcher argument is unused by the compiled matchers;
+            # pass a padded form for backward compatibility.
+            prefix_padded = f"/{prefix}/"
+            for matcher, negated in rules:
+                if matcher(prefix, prefix_padded):
+                    ignored = not negated
 
         return ignored
     
