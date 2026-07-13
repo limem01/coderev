@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+import time
 import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -14,6 +16,14 @@ from typing import Any
 # Default cache settings
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "coderev"
 DEFAULT_CACHE_TTL_HOURS = 168  # 1 week
+
+# Suffix for the temporary files used to stage atomic cache writes.
+TEMP_SUFFIX = ".tmp"
+
+# On Windows, os.replace() fails if another process has the destination open,
+# which a concurrent reader does for a moment. Retry a few times before giving up.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF_SECONDS = 0.01
 
 
 @dataclass
@@ -111,7 +121,52 @@ class ReviewCache:
         """
         subdir = cache_key[:2]
         return self.cache_dir / subdir / f"{cache_key}.json"
-    
+
+    @staticmethod
+    def _write_atomic(cache_path: Path, payload: dict[str, Any]) -> None:
+        """Serialize `payload` to `cache_path` atomically.
+
+        The cache directory is shared between concurrent reviews (async batches,
+        a pre-commit hook running alongside a CI review, ...). Writing JSON
+        straight into the destination leaves a window where a reader sees a
+        truncated file -- and `get()` treats unparseable entries as corrupt and
+        deletes them, so a partial write would destroy a perfectly good entry.
+
+        Instead, stage the content in a temp file in the same directory (same
+        filesystem, so the rename cannot cross devices) and swap it in with
+        os.replace(), which is atomic on both POSIX and Windows. A reader
+        therefore only ever observes the old file or the new one, never a
+        half-written one.
+
+        Raises:
+            OSError: If the entry could not be written or swapped into place.
+                The destination is left untouched and no temp file survives.
+        """
+        fd, tmp_name = tempfile.mkstemp(
+            dir=cache_path.parent,
+            prefix=f".{cache_path.stem}.",
+            suffix=TEMP_SUFFIX,
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            last_error: PermissionError | None = None
+            for attempt in range(_REPLACE_ATTEMPTS):
+                try:
+                    os.replace(tmp_path, cache_path)
+                    return
+                except PermissionError as exc:  # Windows: reader holds the file open
+                    last_error = exc
+                    time.sleep(_REPLACE_BACKOFF_SECONDS * (attempt + 1))
+            raise last_error  # type: ignore[misc]
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
     def get(
         self,
         content: str,
@@ -139,24 +194,56 @@ class ReviewCache:
         if not cache_path.exists():
             return None
         
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            entry = CacheEntry.from_dict(data)
-            
-            if entry.is_expired():
-                # Clean up expired entry
-                cache_path.unlink(missing_ok=True)
-                return None
-            
-            return entry.result
-            
-        except (json.JSONDecodeError, KeyError, OSError):
-            # Invalid cache entry, remove it
-            cache_path.unlink(missing_ok=True)
+        raw = self._read_with_retry(cache_path)
+        if raw is None:
+            # The entry stayed unreadable -- on Windows a concurrent writer's
+            # os.replace() locks the file for an instant. That is a transient miss,
+            # not corruption, so leave the entry alone and recompute.
             return None
-    
+
+        try:
+            entry = CacheEntry.from_dict(json.loads(raw))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, KeyError):
+            # Writes are atomic, so an unparseable entry is genuinely corrupt
+            # (or written by an incompatible version): drop it.
+            self._discard(cache_path)
+            return None
+
+        if entry.is_expired():
+            self._discard(cache_path)
+            return None
+
+        return entry.result
+
+    @staticmethod
+    def _read_with_retry(cache_path: Path) -> str | None:
+        """Read a cache entry, retrying while a concurrent writer holds it locked.
+
+        Returns None if the entry is missing or stayed unreadable, in which case
+        the caller must treat it as a miss (never as corruption -- the bytes were
+        never seen, so there is nothing to judge).
+        """
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                return cache_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                # Pruned or replaced out from under us; nothing to retry for.
+                return None
+            except PermissionError:  # Windows: writer is swapping the file in
+                time.sleep(_REPLACE_BACKOFF_SECONDS * (attempt + 1))
+            except OSError:
+                return None
+        return None
+
+    @staticmethod
+    def _discard(cache_path: Path) -> None:
+        """Delete a cache entry, tolerating a concurrent deletion or a lock."""
+        try:
+            cache_path.unlink(missing_ok=True)
+        except OSError:
+            # Another process holds or already removed it; nothing to do.
+            pass
+
     def set(
         self,
         content: str,
@@ -193,12 +280,12 @@ class ReviewCache:
         )
         
         try:
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(entry.to_dict(), f, indent=2)
-        except OSError:
-            # Cache write failures are non-fatal
+            self._write_atomic(cache_path, entry.to_dict())
+        except (OSError, TypeError, ValueError):
+            # Cache write failures are non-fatal: any previously cached entry
+            # for this key is still intact, and the next review just recomputes.
             pass
-    
+
     def clear(self) -> int:
         """Clear all cached entries.
         
@@ -215,7 +302,15 @@ class ReviewCache:
                 count += 1
             except OSError:
                 pass
-        
+
+        # Sweep temp files left behind by a writer that was killed mid-write.
+        # They are not entries, so they are removed but not counted.
+        for tmp_file in self.cache_dir.rglob(f"*{TEMP_SUFFIX}"):
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass
+
         # Clean up empty subdirectories
         for subdir in self.cache_dir.iterdir():
             if subdir.is_dir() and not any(subdir.iterdir()):
