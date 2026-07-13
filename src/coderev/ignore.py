@@ -450,16 +450,27 @@ class CodeRevIgnore:
             pattern, anchored = self._normalize_pattern(pattern)
             if not pattern:
                 continue
-            compiled.append((self._build_matcher(pattern, anchored), negated))
+            # A trailing '/' means the pattern matches directories only
+            # (gitignore: "the pattern will only match directories").
+            dir_only = pattern.endswith("/")
+            compiled.append((self._build_matcher(pattern, anchored), negated, dir_only))
 
         self._compiled = compiled
         return compiled
 
-    def should_ignore(self, path: Path | str) -> bool:
+    def should_ignore(self, path: Path | str, is_dir: bool | None = None) -> bool:
         """Check if a path should be ignored.
 
         Supports negation patterns prefixed with '!'. Like gitignore semantics,
         patterns are evaluated top-to-bottom and the last matching rule wins.
+
+        A trailing-slash pattern matches directories only (gitignore: "if there
+        is a separator at the end of the pattern then the pattern will only
+        match directories"). ``is_dir`` tells us whether the *leaf* of ``path``
+        is a directory; when ``None`` it is inferred from disk if the path
+        exists, and otherwise assumed unknown (dir-only rules still apply, for
+        backwards compatibility). Ancestor prefixes of ``path`` are always
+        directories, so dir-only rules always apply to them.
 
         Follows gitignore's parent-directory rule: "It is not possible to
         re-include a file if a parent directory of that file is excluded." We
@@ -475,6 +486,18 @@ class CodeRevIgnore:
         if not path_str:
             return False
 
+        # Determine whether the leaf is a directory so dir-only ('foo/')
+        # patterns don't match a regular file of the same name. If not told,
+        # infer from disk when the path exists; otherwise leave it unknown
+        # (None) so dir-only rules still apply as before.
+        if is_dir is None:
+            try:
+                p = path if isinstance(path, Path) else Path(path)
+                if p.exists():
+                    is_dir = p.is_dir()
+            except (OSError, ValueError):
+                is_dir = None
+
         segments = [s for s in path_str.split("/") if s]
         rules = self._compiled_patterns()
 
@@ -488,10 +511,17 @@ class CodeRevIgnore:
                 # the whole subtree ignored.
                 return True
             prefix = "/".join(prefix_parts)
+            # Every non-final prefix is an ancestor directory; only the final
+            # segment's directory-ness is in question.
+            is_last = len(prefix_parts) == len(segments)
+            leaf_is_dir = is_dir if is_last else True
             # The second matcher argument is unused by the compiled matchers;
             # pass a padded form for backward compatibility.
             prefix_padded = f"/{prefix}/"
-            for matcher, negated in rules:
+            for matcher, negated, dir_only in rules:
+                # A dir-only rule cannot match a leaf we know to be a file.
+                if dir_only and leaf_is_dir is False:
+                    continue
                 if matcher(prefix, prefix_padded):
                     ignored = not negated
 
