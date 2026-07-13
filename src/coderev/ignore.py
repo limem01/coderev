@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 from pathlib import Path
@@ -27,12 +26,24 @@ def _globstar_to_regex(pattern: str) -> str:
     * ``*`` and ``?`` never cross ``/``.
     * ``[...]`` character classes (including ranges like ``[a-z]`` and negations
       like ``[!0-9]``) match a single character, mirroring gitignore.
+    * a backslash escapes the following glob metacharacter, so ``\\*`` matches a
+      literal ``*`` rather than acting as a wildcard.
     """
     i = 0
     n = len(pattern)
     out: list[str] = []
     while i < n:
         c = pattern[i]
+        if c == "\\":
+            # Escape: the next character is a literal, never a metacharacter.
+            # A trailing lone backslash is itself a literal.
+            if i + 1 < n:
+                out.append(re.escape(pattern[i + 1]))
+                i += 2
+            else:
+                out.append(re.escape("\\"))
+                i += 1
+            continue
         if c == "[":
             # Parse a character class, e.g. [abc], [a-z], [!0-9].
             j = i + 1
@@ -95,6 +106,31 @@ def _globstar_to_regex(pattern: str) -> str:
         out.append(re.escape(c))
         i += 1
     return "".join(out)
+
+
+# Characters a backslash may escape inside a pattern. A backslash before any
+# *other* character is treated as a Windows path separator (see
+# :meth:`CodeRevIgnore._normalize_pattern`), which is why this set is explicit
+# rather than "escape anything".
+ESCAPABLE_CHARS = set("*?[]!#\\ ")
+
+
+def _has_globstar(pattern: str) -> bool:
+    """True if ``pattern`` contains an *unescaped* ``**``.
+
+    ``a\\**`` is a literal ``*`` followed by a wildcard, not a globstar, so a
+    naive ``"**" in pattern`` check would route it down the wrong branch.
+    """
+    i = 0
+    n = len(pattern)
+    while i < n:
+        if pattern[i] == "\\":
+            i += 2
+            continue
+        if pattern.startswith("**", i):
+            return True
+        i += 1
+    return False
 
 
 DEFAULT_IGNORE_PATTERNS = [
@@ -298,6 +334,27 @@ class CodeRevIgnore:
         s = s.lstrip("/")
         return s
 
+    @staticmethod
+    def _fold_separators(pattern: str) -> str:
+        """Fold Windows separators to ``/`` while preserving escape sequences.
+
+        A backslash followed by a glob metacharacter is an escape and is kept
+        verbatim (``\\*`` stays ``\\*``); any other backslash is a Windows path
+        separator and becomes ``/``.
+        """
+        out: list[str] = []
+        i = 0
+        n = len(pattern)
+        while i < n:
+            c = pattern[i]
+            if c == "\\" and i + 1 < n and pattern[i + 1] in ESCAPABLE_CHARS:
+                out.append(pattern[i : i + 2])
+                i += 2
+                continue
+            out.append("/" if c == "\\" else c)
+            i += 1
+        return "".join(out)
+
     def _normalize_pattern(self, pattern: str) -> tuple[str, bool]:
         """Normalize a pattern so matching is consistent across OSes.
 
@@ -306,8 +363,13 @@ class CodeRevIgnore:
         ``/build/`` matches a top-level ``build/`` but not a nested
         ``src/build/``. Patterns without a leading separator continue to match at
         any depth.
+
+        A backslash before a glob metacharacter (see :data:`ESCAPABLE_CHARS`) is
+        kept as an escape, so ``report\\*.csv`` matches a file literally named
+        ``report*.csv``. A backslash before anything else is a Windows path
+        separator and is folded to ``/``, keeping ``src\\generated\\`` working.
         """
-        p = pattern.replace("\\", "/").strip()
+        p = self._fold_separators(pattern).lstrip()
         # Allow users to use leading ./ or / (repo-relative) in patterns.
         if os.name == "nt":
             p = p.lower()
@@ -337,39 +399,21 @@ class CodeRevIgnore:
         anchored: bool = False,
     ) -> bool:
         """Check whether a *normalized* pattern matches a *normalized* path string."""
-        # Handle globstar patterns (containing **) with proper gitignore
-        # semantics: ** crosses directory separators, * does not. Globstar
-        # patterns are already anchored at the start of the path via regex.
-        if "**" in pattern:
-            return self._matches_globstar(pattern, path_str)
+        # Delegate to the same matcher the cached path uses, so the two can
+        # never drift apart.
+        return self._build_matcher(pattern, anchored)(path_str, path_str_padded)
 
-        # Anchored patterns (leading '/' or './') must match from the repo root.
-        # Reuse the globstar regex builder: it anchors with ^...$ and keeps '*'
-        # within a single path segment, giving true gitignore anchoring.
-        if anchored:
-            return self._matches_globstar(pattern, path_str)
+    @staticmethod
+    def _compile_segment(pattern: str) -> re.Pattern:
+        """Compile a separator-free pattern into a regex matching one segment.
 
-        # Handle directory patterns (ending with /). An unanchored directory
-        # pattern has no internal separator (an internal '/' would have anchored
-        # it), so its name must match a single path *segment*. Matching each
-        # segment individually keeps the match "at any depth" while stopping a
-        # wildcard from crossing '/': ``foo*bar/`` matches ``a/fooXbar/y`` but
-        # not ``foo/x/bar/z``, mirroring gitignore's FNM_PATHNAME semantics.
-        if pattern.endswith("/"):
-            dir_pattern = pattern.rstrip("/")
-            return any(
-                fnmatch.fnmatch(seg, dir_pattern)
-                for seg in path_str.split("/")
-                if seg
-            )
-
-        # Regular glob matching. An unanchored pattern with no separator matches
-        # "at any level" (gitignore semantics), but its ``*``/``?`` must not
-        # cross directory separators. Matching each path *segment* individually
-        # gives both properties: it matches a basename like ``a.py`` against
-        # ``*.py`` at any depth, and a directory component like ``foo`` against
-        # ``foo`` -- while never letting a wildcard span a ``/``.
-        return any(fnmatch.fnmatch(seg, pattern) for seg in path_str.split("/") if seg)
+        Used for unanchored patterns, which match a single path segment at any
+        depth. We build the regex with :func:`_globstar_to_regex` rather than
+        using :mod:`fnmatch` so that backslash escapes (``\\*``, ``\\?``,
+        ``\\[``) are honored here exactly as they are on the anchored/globstar
+        path -- ``fnmatch`` has no escape syntax.
+        """
+        return re.compile("^" + _globstar_to_regex(pattern) + "$")
 
     @staticmethod
     def _compile_globstar(pattern: str) -> re.Pattern:
@@ -402,32 +446,21 @@ class CodeRevIgnore:
         compilation happens here (once) rather than on every path check.
         """
         # Globstar and anchored patterns are matched via an anchored regex.
-        if "**" in pattern or anchored:
+        if _has_globstar(pattern) or anchored:
             regex = self._compile_globstar(pattern)
             return lambda ps, _pp: regex.match(ps) is not None
 
-        # Directory patterns (ending with '/') match a path segment anywhere.
-        # Match each segment individually so the pattern applies at any depth
-        # while its wildcards never cross '/' (see :meth:`_matches`).
-        if pattern.endswith("/"):
-            dir_pattern = pattern.rstrip("/")
+        # Unanchored patterns (directory or not) have no internal separator, so
+        # they match a single path *segment* at any depth. Matching each segment
+        # individually keeps the "any depth" behavior while stopping a wildcard
+        # from crossing '/': ``foo*bar/`` matches ``a/fooXbar/y`` but not
+        # ``foo/x/bar/z``, mirroring gitignore's FNM_PATHNAME semantics.
+        regex = self._compile_segment(pattern.rstrip("/"))
 
-            def _dir_match(ps: str, _pp: str) -> bool:
-                return any(
-                    fnmatch.fnmatch(seg, dir_pattern)
-                    for seg in ps.split("/")
-                    if seg
-                )
+        def _segment_match(ps: str, _pp: str) -> bool:
+            return any(regex.match(seg) for seg in ps.split("/") if seg)
 
-            return _dir_match
-
-        # Regular glob: match any single path segment (see :meth:`_matches`).
-        # Segment-wise matching keeps ``*``/``?`` from crossing ``/`` while still
-        # matching at any depth, mirroring gitignore's no-separator patterns.
-        def _glob_match(ps: str, _pp: str) -> bool:
-            return any(fnmatch.fnmatch(seg, pattern) for seg in ps.split("/") if seg)
-
-        return _glob_match
+        return _segment_match
 
     def _compiled_patterns(self) -> list[tuple]:
         """Return the cached list of ``(matcher, negated)`` tuples, building it
