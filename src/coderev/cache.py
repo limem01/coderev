@@ -25,6 +25,14 @@ TEMP_SUFFIX = ".tmp"
 _REPLACE_ATTEMPTS = 5
 _REPLACE_BACKOFF_SECONDS = 0.01
 
+# How an attempt to load an entry off disk turned out. The distinction that
+# matters is CORRUPT (the bytes were read and are garbage -- safe to drop) vs
+# UNREADABLE (the bytes were never seen, so the entry must be left alone).
+_OK = "ok"
+_MISSING = "missing"
+_UNREADABLE = "unreadable"
+_CORRUPT = "corrupt"
+
 
 @dataclass
 class CacheEntry:
@@ -194,19 +202,15 @@ class ReviewCache:
         if not cache_path.exists():
             return None
         
-        raw = self._read_with_retry(cache_path)
-        if raw is None:
-            # The entry stayed unreadable -- on Windows a concurrent writer's
+        entry, state = self._load_entry(cache_path)
+
+        if state == _CORRUPT:
+            self._discard(cache_path)
+            return None
+        if entry is None:
+            # Missing, or it stayed unreadable -- on Windows a concurrent writer's
             # os.replace() locks the file for an instant. That is a transient miss,
             # not corruption, so leave the entry alone and recompute.
-            return None
-
-        try:
-            entry = CacheEntry.from_dict(json.loads(raw))
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, KeyError):
-            # Writes are atomic, so an unparseable entry is genuinely corrupt
-            # (or written by an incompatible version): drop it.
-            self._discard(cache_path)
             return None
 
         if entry.is_expired():
@@ -214,6 +218,45 @@ class ReviewCache:
             return None
 
         return entry.result
+
+    @classmethod
+    def _load_entry(cls, cache_path: Path) -> tuple[CacheEntry | None, str]:
+        """Load one entry off disk, reporting *why* it could not be loaded.
+
+        Every caller that reads an entry goes through here, because the safe
+        reaction to a failed read depends entirely on whether the bytes were
+        actually seen. Writes are atomic, so JSON that parses badly is genuinely
+        corrupt and may be dropped. But a read that never completed -- a
+        concurrent writer's os.replace() holding a Windows lock, an I/O blip --
+        says nothing about the entry, and deleting on that basis destroys a
+        perfectly valid cached review.
+
+        Returns:
+            (entry, _OK) when the entry parsed, else (None, _MISSING/_UNREADABLE/_CORRUPT).
+        """
+        raw = cls._read_with_retry(cache_path)
+        if raw is None:
+            return None, _MISSING if not cache_path.exists() else _UNREADABLE
+
+        try:
+            return CacheEntry.from_dict(json.loads(raw)), _OK
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, KeyError):
+            # Written by an incompatible version, or truncated by a pre-atomic
+            # writer. Either way the content is unusable: drop it.
+            return None, _CORRUPT
+
+    def _entry_files(self) -> list[Path]:
+        """Every file in the cache dir that is meant to be an entry.
+
+        Materialized into a list so a concurrent clear()/prune() mutating the
+        directory cannot disturb an in-progress walk. Temp files staged by
+        _write_atomic() are debris, not entries, and never count.
+        """
+        return [
+            path
+            for path in self.cache_dir.rglob("*.json")
+            if not path.name.endswith(TEMP_SUFFIX)
+        ]
 
     @staticmethod
     def _read_with_retry(cache_path: Path) -> str | None:
@@ -236,13 +279,18 @@ class ReviewCache:
         return None
 
     @staticmethod
-    def _discard(cache_path: Path) -> None:
-        """Delete a cache entry, tolerating a concurrent deletion or a lock."""
+    def _discard(cache_path: Path) -> bool:
+        """Delete a cache entry, tolerating a concurrent deletion or a lock.
+
+        Returns True only if this call actually removed the file, so callers can
+        report a count that reflects what happened rather than what was intended.
+        """
         try:
-            cache_path.unlink(missing_ok=True)
+            cache_path.unlink()
         except OSError:
-            # Another process holds or already removed it; nothing to do.
-            pass
+            # Another process holds it open, or already removed it.
+            return False
+        return True
 
     def set(
         self,
@@ -322,70 +370,77 @@ class ReviewCache:
         return count
     
     def prune_expired(self) -> int:
-        """Remove all expired cache entries.
-        
+        """Remove expired (and corrupt) cache entries.
+
+        An entry is only ever deleted on evidence read off disk: it parsed and
+        is past its TTL, or it parsed as garbage. An entry that could not be
+        read -- a concurrent writer's os.replace() holding a Windows lock, a
+        transient I/O error -- is left strictly alone, because a failed read is
+        not evidence of anything and pruning on it would silently destroy valid
+        cached reviews.
+
         Returns:
-            Number of entries pruned.
+            Number of entries actually removed.
         """
         if not self.cache_dir.exists():
             return 0
-        
+
         count = 0
-        for cache_file in self.cache_dir.rglob("*.json"):
-            try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                entry = CacheEntry.from_dict(data)
-                if entry.is_expired():
-                    cache_file.unlink()
+        for cache_file in self._entry_files():
+            entry, state = self._load_entry(cache_file)
+
+            if state in (_MISSING, _UNREADABLE):
+                continue
+
+            if state == _CORRUPT or entry.is_expired():  # type: ignore[union-attr]
+                if self._discard(cache_file):
                     count += 1
-            except (json.JSONDecodeError, KeyError, OSError):
-                # Invalid entry, remove it
-                try:
-                    cache_file.unlink()
-                    count += 1
-                except OSError:
-                    pass
-        
+
         return count
-    
+
     def stats(self) -> dict[str, Any]:
         """Get cache statistics.
-        
+
         Returns:
             Dictionary with cache statistics including:
             - total_entries: Number of cached entries
             - total_size_bytes: Total size of cache in bytes
-            - expired_entries: Number of expired entries
+            - expired_entries: Number of entries prune_expired() would remove
+              (past their TTL, or corrupt)
+            - unreadable_entries: Number of entries that could not be read this
+              scan (transient -- they are not pruned and may well be valid)
             - cache_dir: Path to cache directory
         """
-        if not self.cache_dir.exists():
-            return {
-                "total_entries": 0,
-                "total_size_bytes": 0,
-                "expired_entries": 0,
-                "cache_dir": str(self.cache_dir),
-            }
-        
         total = 0
         expired = 0
+        unreadable = 0
         size = 0
-        
-        for cache_file in self.cache_dir.rglob("*.json"):
-            total += 1
-            size += cache_file.stat().st_size
+
+        for cache_file in self._entry_files() if self.cache_dir.exists() else []:
+            entry, state = self._load_entry(cache_file)
+            if state == _MISSING:
+                # Removed by a concurrent clear()/prune() mid-scan: not an entry.
+                continue
+
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                entry = CacheEntry.from_dict(data)
-                if entry.is_expired():
-                    expired += 1
-            except (json.JSONDecodeError, KeyError, OSError):
-                expired += 1  # Count invalid entries as expired
-        
+                size += cache_file.stat().st_size
+            except OSError:
+                # Vanished (or locked) between the read and the stat. Reporting
+                # statistics must never be the thing that crashes a review.
+                continue
+
+            total += 1
+            if state == _UNREADABLE:
+                unreadable += 1
+            elif state == _CORRUPT or entry.is_expired():  # type: ignore[union-attr]
+                # Corrupt entries are counted as expired: prune_expired() drops
+                # both, so this stays the "how many would pruning remove" number.
+                expired += 1
+
         return {
             "total_entries": total,
             "total_size_bytes": size,
             "expired_entries": expired,
+            "unreadable_entries": unreadable,
             "cache_dir": str(self.cache_dir),
         }
