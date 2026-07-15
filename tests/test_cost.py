@@ -207,6 +207,43 @@ class TestGetModelPricing:
         assert get_model_pricing("openai/totally-made-up-model") == DEFAULT_PRICING
         assert is_known_model("openai/totally-made-up-model") is False
 
+    def test_gemini_family_pricing(self):
+        """Google Gemini base aliases must resolve to their published per-1M
+        rates instead of DEFAULT_PRICING (regression: previously ~100x off for
+        Flash models)."""
+        assert get_model_pricing("gemini-1.5-pro") == (1.25, 5.00)
+        assert get_model_pricing("gemini-1.5-flash") == (0.075, 0.30)
+        assert get_model_pricing("gemini-1.5-flash-8b") == (0.0375, 0.15)
+        assert get_model_pricing("gemini-2.0-flash") == (0.10, 0.40)
+        assert get_model_pricing("gemini-2.0-flash-lite") == (0.075, 0.30)
+        assert get_model_pricing("gemini-2.5-pro") == (1.25, 10.00)
+        assert get_model_pricing("gemini-2.5-flash") == (0.30, 2.50)
+        assert get_model_pricing("gemini-2.5-flash-lite") == (0.10, 0.40)
+        assert is_known_model("gemini-2.0-flash") is True
+
+    def test_gemini_dated_suffix_resolves_to_most_specific_base(self):
+        """Versioned/dated Gemini IDs (``-002``, ``-001``, preview dates) must
+        resolve to the most specific base via longest-prefix matching, and the
+        more specific ``-lite``/``-8b`` variants must win over their parent."""
+        assert get_model_pricing("gemini-1.5-pro-002") == (1.25, 5.00)
+        assert get_model_pricing("gemini-2.0-flash-001") == (0.10, 0.40)
+        assert get_model_pricing("gemini-2.5-flash-preview-05-20") == (0.30, 2.50)
+        # More specific variant must not be swallowed by its parent prefix.
+        assert get_model_pricing("gemini-1.5-flash-8b") == (0.0375, 0.15)
+        assert get_model_pricing("gemini-2.5-flash-lite") == (0.10, 0.40)
+
+    def test_gemini_provider_prefixed_ids_resolve(self):
+        """Gemini is commonly routed as ``gemini/...`` (LiteLLM) or
+        ``google/...`` / ``openrouter/google/...`` -- prefixes must peel to the
+        bare model's pricing."""
+        assert get_model_pricing("gemini/gemini-2.0-flash") == (0.10, 0.40)
+        assert get_model_pricing("google/gemini-2.5-pro") == (1.25, 10.00)
+        assert get_model_pricing("openrouter/google/gemini-2.5-flash") == (
+            0.30,
+            2.50,
+        )
+        assert is_known_model("gemini/gemini-2.0-flash") is True
+
 
 class TestIsKnownModel:
     """Tests for is_known_model / DEFAULT_PRICING fallback detection."""

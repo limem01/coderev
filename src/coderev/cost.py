@@ -65,6 +65,20 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "o1": (15.00, 60.00),
     "o3-mini": (1.10, 4.40),
     "o4-mini": (1.10, 4.40),
+    # Google Gemini models. Commonly routed through LiteLLM/OpenRouter with a
+    # "gemini/" or "google/" prefix (handled by _resolve_pricing); dated/version
+    # suffixes like "-002" or "-001" resolve via longest-prefix matching.
+    # Prices are the standard (non-batch) per-1M-token rates for the base
+    # (lower-context) tier -- Gemini bills a higher rate above 128k/200k tokens,
+    # matching how the Anthropic/OpenAI entries above use a single flat rate.
+    "gemini-1.5-pro": (1.25, 5.00),
+    "gemini-1.5-flash": (0.075, 0.30),
+    "gemini-1.5-flash-8b": (0.0375, 0.15),
+    "gemini-2.0-flash": (0.10, 0.40),
+    "gemini-2.0-flash-lite": (0.075, 0.30),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
 }
 
 # Default pricing for unknown models (conservative estimate)
