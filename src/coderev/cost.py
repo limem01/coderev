@@ -202,6 +202,20 @@ def _resolve_pricing(model: str) -> tuple[tuple[float, float], bool]:
             if matched:
                 return resolved, True
 
+    # Provider-routed IDs. Routers/proxies (LiteLLM, OpenRouter, the Anthropic
+    # SDK's Bedrock/Vertex paths) prefix the model with one or more
+    # "provider/" segments, e.g. "openai/gpt-4o-mini",
+    # "anthropic/claude-3-5-sonnet-20241022", or
+    # "openrouter/anthropic/claude-3.5-sonnet". Strip the leading segment and
+    # resolve the remainder so these price the same as the bare model instead
+    # of falling back to DEFAULT_PRICING. Recursion peels multi-level prefixes.
+    if "/" in model:
+        _, _, rest = model.partition("/")
+        if rest:
+            resolved, matched = _resolve_pricing(rest)
+            if matched:
+                return resolved, True
+
     # Longest-prefix match: a dated/suffixed model ID (e.g.
     # "gpt-4o-2024-08-06" or "claude-sonnet-4-5-20260101") should resolve to
     # the most specific known base model, not the first family that happens

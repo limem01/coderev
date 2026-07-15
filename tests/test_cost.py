@@ -174,6 +174,39 @@ class TestGetModelPricing:
         assert get_model_pricing("totally-unknown-latest") == DEFAULT_PRICING
         assert is_known_model("totally-unknown-latest") is False
 
+    def test_provider_prefixed_ids_resolve(self):
+        """Router/proxy IDs (LiteLLM, OpenRouter, SDK Bedrock/Vertex paths)
+        prefix the model with a ``provider/`` segment. Stripping it must
+        resolve to the same pricing as the bare model, not DEFAULT_PRICING."""
+        assert get_model_pricing("openai/gpt-4o-mini") == (0.15, 0.60)
+        assert get_model_pricing("openai/gpt-4o") == (2.50, 10.00)
+        assert get_model_pricing("anthropic/claude-3-5-sonnet-20241022") == (
+            3.00,
+            15.00,
+        )
+        # Provider prefix combined with a base alias and a moving suffix.
+        assert get_model_pricing("anthropic/claude-3-5-sonnet-latest") == (
+            3.00,
+            15.00,
+        )
+        assert is_known_model("openai/gpt-4o-mini") is True
+
+    def test_multi_level_provider_prefix_resolves(self):
+        """OpenRouter-style double prefixes (``openrouter/anthropic/...``)
+        must peel one segment at a time until the base model resolves."""
+        assert get_model_pricing("openrouter/anthropic/claude-3.5-sonnet") == (
+            3.00,
+            15.00,
+        )
+        assert get_model_pricing("openrouter/openai/gpt-4.1-mini") == (0.40, 1.60)
+        assert is_known_model("openrouter/anthropic/claude-3.5-sonnet") is True
+
+    def test_provider_prefix_with_unknown_model_falls_back(self):
+        """A provider prefix on an unknown model must still fall back, not be
+        treated as known just because it contained a ``/``."""
+        assert get_model_pricing("openai/totally-made-up-model") == DEFAULT_PRICING
+        assert is_known_model("openai/totally-made-up-model") is False
+
 
 class TestIsKnownModel:
     """Tests for is_known_model / DEFAULT_PRICING fallback detection."""
