@@ -84,6 +84,23 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 # Default pricing for unknown models (conservative estimate)
 DEFAULT_PRICING = (10.00, 30.00)
 
+# AWS Bedrock and Google Vertex expose the same underlying models under
+# dot-separated ids rather than the slash-separated ids LiteLLM/OpenRouter use.
+# A Bedrock id looks like "anthropic.claude-3-5-sonnet-20240620-v1:0", and its
+# cross-region inference profiles prepend a region prefix
+# ("us.anthropic.claude-...", "eu.anthropic.claude-...", "apac.anthropic..."),
+# while Vertex appends an "@<date>" version ("claude-3-5-sonnet@20240620").
+# We peel these leading tokens so the underlying model prices correctly instead
+# of hitting DEFAULT_PRICING. The tokens are matched exactly (never as a bare
+# dot split) so real alias dots like "claude-3.5-sonnet" are left untouched --
+# "claude-3" is not a provider prefix.
+_BEDROCK_REGION_PREFIXES = frozenset({"us", "eu", "apac", "ap", "global", "us-gov"})
+_CLOUD_VENDOR_PREFIXES = frozenset({
+    "anthropic", "openai", "google", "meta", "mistral", "cohere",
+    "amazon", "deepseek", "ai21", "stability",
+})
+_CLOUD_PROVIDER_PREFIXES = _BEDROCK_REGION_PREFIXES | _CLOUD_VENDOR_PREFIXES
+
 # Both Anthropic (Message Batches) and OpenAI (Batch API) charge 50% of the
 # standard per-token rate for asynchronous batch requests. Reviews that don't
 # need a synchronous result can be gated/budgeted at this reduced rate.
@@ -216,17 +233,40 @@ def _resolve_pricing(model: str) -> tuple[tuple[float, float], bool]:
             if matched:
                 return resolved, True
 
-    # Provider-routed IDs. Routers/proxies (LiteLLM, OpenRouter, the Anthropic
-    # SDK's Bedrock/Vertex paths) prefix the model with one or more
-    # "provider/" segments, e.g. "openai/gpt-4o-mini",
-    # "anthropic/claude-3-5-sonnet-20241022", or
+    # Provider-routed IDs. Routers/proxies (LiteLLM, OpenRouter) prefix the
+    # model with one or more slash-separated "provider/" segments, e.g.
+    # "openai/gpt-4o-mini", "anthropic/claude-3-5-sonnet-20241022", or
     # "openrouter/anthropic/claude-3.5-sonnet". Strip the leading segment and
     # resolve the remainder so these price the same as the bare model instead
     # of falling back to DEFAULT_PRICING. Recursion peels multi-level prefixes.
+    # (AWS Bedrock / Google Vertex use dot-separated ids instead -- handled
+    # just below.)
     if "/" in model:
         _, _, rest = model.partition("/")
         if rest:
             resolved, matched = _resolve_pricing(rest)
+            if matched:
+                return resolved, True
+
+    # Cloud-routed IDs (AWS Bedrock / Google Vertex) are dot-separated rather
+    # than slash-separated: "anthropic.claude-3-5-sonnet-20240620-v1:0", with an
+    # optional region prefix on Bedrock cross-region inference profiles
+    # ("us.anthropic.claude-...", "eu.anthropic...", "apac.anthropic..."). Peel a
+    # single leading provider/region token (matched exactly against the known
+    # set so alias dots like "claude-3.5-sonnet" survive) and re-resolve the
+    # remainder, recursing to strip "<region>.<vendor>." two-part prefixes.
+    head, dot, rest = model.partition(".")
+    if dot and rest and head.lower() in _CLOUD_PROVIDER_PREFIXES:
+        resolved, matched = _resolve_pricing(rest)
+        if matched:
+            return resolved, True
+
+    # Bedrock appends an inference-profile version suffix like ":0" (as in
+    # "...-v1:0"). Strip a trailing ":<digits>" and re-resolve the base id.
+    if ":" in model:
+        base, _, tail = model.rpartition(":")
+        if base and tail.isdigit():
+            resolved, matched = _resolve_pricing(base)
             if matched:
                 return resolved, True
 
@@ -241,7 +281,9 @@ def _resolve_pricing(model: str) -> tuple[tuple[float, float], bool]:
         if not model_lower.startswith(key_lower):
             continue
         boundary = model_lower[len(key_lower):len(key_lower) + 1]
-        if boundary and boundary not in "-.":
+        # '-' and '.' delimit version tokens; '@' is Vertex's date separator
+        # ("claude-3-5-sonnet@20240620") and ':' a Bedrock version separator.
+        if boundary and boundary not in "-.@:":
             continue
         if best_key is None or len(key_lower) > len(best_key):
             best_key = key_lower
