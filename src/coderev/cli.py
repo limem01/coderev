@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -41,16 +42,47 @@ def collect_files(
     paths: tuple[str, ...],
     recursive: bool = False,
     exclude: tuple[str, ...] = (),
+    use_ignore: bool = True,
 ) -> list[Path]:
-    """Collect files from paths, handling directories."""
+    """Collect files from paths, handling directories.
+
+    When ``use_ignore`` is True (the default), files matched by the repo's
+    ``.coderevignore`` are dropped as well. Without this, ``review``/``estimate``
+    would process files the user explicitly configured to skip — sending them to
+    the API and inflating cost estimates. Files passed directly on the command
+    line are always kept; ``.coderevignore`` only filters directory expansion,
+    matching how an explicit path overrides ignore rules.
+    """
     import fnmatch
-    
+
+    ignorer = None
+    if use_ignore:
+        from coderev.ignore import CodeRevIgnore
+
+        ignorer = CodeRevIgnore.load()
+
+    def _is_ignored(file_path: Path) -> bool:
+        if ignorer is None:
+            return False
+        # Match against a cwd-relative path so root-anchored patterns
+        # (e.g. "/build/") line up with the repo root the same way the
+        # ignore file is authored. Fall back to the raw path if it lives
+        # outside cwd (relpath would produce "../" noise).
+        try:
+            rel = os.path.relpath(file_path, Path.cwd())
+        except ValueError:
+            rel = str(file_path)
+        if rel.startswith(".."):
+            rel = str(file_path)
+        return ignorer.should_ignore(rel, is_dir=False)
+
     files: list[Path] = []
-    
+
     for path_str in paths:
         path = Path(path_str)
-        
+
         if path.is_file():
+            # An explicitly named file is always reviewed, ignore rules aside.
             files.append(path)
         elif path.is_dir():
             pattern = "**/*" if recursive else "*"
@@ -62,11 +94,11 @@ def collect_files(
                         fnmatch.fnmatch(file_path.name, exc)
                         for exc in exclude
                     )
-                    if not excluded:
+                    if not excluded and not _is_ignored(file_path):
                         files.append(file_path)
         else:
             console.print(f"[yellow]Warning: {path} does not exist[/]")
-    
+
     return files
 
 
@@ -128,6 +160,7 @@ def print_cost_estimate(estimate: "CostEstimate", console: Console) -> None:
 @click.option("--parallel/--no-parallel", default=True, help="Review files in parallel (default: enabled)")
 @click.option("--max-concurrent", "-c", type=int, default=5, help="Max concurrent reviews when using parallel mode")
 @click.option("--estimate", is_flag=True, help="Show cost estimate without running the review")
+@click.option("--no-ignore", is_flag=True, help="Do not apply .coderevignore when expanding directories")
 def review(
     paths: tuple[str, ...],
     focus: tuple[str, ...],
@@ -138,16 +171,17 @@ def review(
     parallel: bool,
     max_concurrent: int,
     estimate: bool,
+    no_ignore: bool,
 ) -> None:
     """Review code files for issues.
-    
+
     Uses parallel processing by default for faster reviews of multiple files.
     Use --estimate to see the expected cost before running.
     """
     import asyncio
     from coderev.async_reviewer import AsyncCodeReviewer
     from coderev.cost import CostEstimator, CostEstimate
-    
+
     try:
         config = Config.load()
         errors = config.validate()
@@ -155,8 +189,8 @@ def review(
             for error in errors:
                 console.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
-        
-        files = collect_files(paths, recursive, exclude)
+
+        files = collect_files(paths, recursive, exclude, use_ignore=not no_ignore)
         
         if not files:
             console.print("[yellow]No files to review[/]")
@@ -796,6 +830,7 @@ def bpr(
 @click.option("--max-cost", type=float, help="Fail (exit code 2) if the estimated total cost exceeds this USD budget")
 @click.option("--batch", is_flag=True, help="Estimate at the 50% Batch API rate (Anthropic Message Batches / OpenAI Batch API)")
 @click.option("--per-file", is_flag=True, help="Show a per-file cost breakdown (most expensive first)")
+@click.option("--no-ignore", is_flag=True, help="Do not apply .coderevignore when expanding directories")
 @click.option("--format", "output_format", type=click.Choice(["rich", "json"]), default="rich")
 def estimate(
     paths: tuple[str, ...],
@@ -806,6 +841,7 @@ def estimate(
     max_cost: Optional[float],
     batch: bool,
     per_file: bool,
+    no_ignore: bool,
     output_format: str,
 ) -> None:
     """Estimate review cost without running the review.
@@ -830,8 +866,8 @@ def estimate(
     try:
         config = Config.load()
         
-        files = collect_files(paths, recursive, exclude)
-        
+        files = collect_files(paths, recursive, exclude, use_ignore=not no_ignore)
+
         if not files:
             console.print("[yellow]No files to estimate[/]")
             return
