@@ -10,12 +10,44 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from coderev.reviewer import ReviewResult, Issue, Severity, Category
+
+# Suffix for the temporary files used to stage atomic history writes.
+TEMP_SUFFIX = ".tmp"
+
+# Suffix for a month file quarantined because it could not be parsed. Kept
+# rather than deleted so a user can recover entries by hand.
+CORRUPT_SUFFIX = ".corrupt"
+
+# On Windows, os.replace() and read_text() fail while another process holds the
+# file open, which a concurrent reader/writer does for a moment. Retry briefly.
+_RETRY_ATTEMPTS = 5
+_RETRY_BACKOFF_SECONDS = 0.01
+
+# How an attempt to load a month file off disk turned out. The distinction that
+# matters is CORRUPT (the bytes were read and are garbage) vs UNREADABLE (the
+# bytes were never seen, so the file must be left strictly alone).
+_OK = "ok"
+_MISSING = "missing"
+_UNREADABLE = "unreadable"
+_CORRUPT = "corrupt"
+
+
+class HistoryWriteError(RuntimeError):
+    """Raised when history cannot be updated without risking data loss.
+
+    Adding to history is a read-modify-write against a whole month file. If the
+    read fails, the in-memory entry list is not "the month so far" -- it is
+    nothing at all, and writing it back would erase every review recorded that
+    month. So a failed read aborts the write instead.
+    """
 
 
 def _default_history_dir() -> Path:
@@ -224,29 +256,173 @@ class ReviewHistory:
         dt = dt or datetime.now(timezone.utc)
         return self.history_dir / f"reviews_{dt.strftime('%Y-%m')}.json"
     
-    def _load_month_file(self, path: Path) -> list[dict[str, Any]]:
-        """Load entries from a monthly history file."""
-        if not path.exists():
+    def _month_files(self) -> list[Path]:
+        """Every file in the history dir that is meant to be a month file.
+
+        Materialized into a list so a concurrent clear() mutating the directory
+        cannot disturb an in-progress walk. Temp files staged by _write_atomic()
+        and quarantined `.corrupt` sidecars are debris, not month files, and are
+        never picked up -- `reviews_*.json` alone would match neither, but the
+        explicit filter keeps that guarantee from resting on suffix ordering.
+        """
+        if not self.history_dir.exists():
             return []
-        
+
+        return [
+            path
+            for path in sorted(self.history_dir.glob("reviews_*.json"))
+            if not path.name.endswith((TEMP_SUFFIX, CORRUPT_SUFFIX))
+        ]
+
+    @staticmethod
+    def _read_with_retry(path: Path) -> str | None:
+        """Read a month file, retrying while a concurrent writer holds it locked.
+
+        Returns None if the file is missing or stayed unreadable. The caller must
+        never read that as "empty" -- the bytes were never seen, so there is
+        nothing to judge.
+        """
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                return path.read_text(encoding='utf-8')
+            except FileNotFoundError:
+                # Removed or replaced out from under us; nothing to retry for.
+                return None
+            except PermissionError:  # Windows: a writer is swapping the file in
+                time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+            except OSError:
+                return None
+        return None
+
+    @classmethod
+    def _load_entries(cls, path: Path) -> tuple[list[dict[str, Any]], str]:
+        """Load one month file, reporting *why* it could not be loaded.
+
+        Every caller that reads a month file goes through here, because the safe
+        reaction to a failed read depends entirely on whether the bytes were
+        actually seen. Writes are atomic, so JSON that parses badly is genuinely
+        corrupt. But a read that never completed -- a concurrent writer's
+        os.replace() holding a Windows lock, an I/O blip -- says nothing about
+        the file, and treating it as empty would let add() write back a
+        single-entry month and erase every review recorded that month.
+
+        Returns:
+            (entries, _OK) when the file parsed, else ([], _MISSING/_UNREADABLE/_CORRUPT).
+        """
+        raw = cls._read_with_retry(path)
+        if raw is None:
+            return [], _MISSING if not path.exists() else _UNREADABLE
+
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get("entries", [])
-        except (json.JSONDecodeError, OSError):
+            data = json.loads(raw)
+            entries = data.get("entries", [])
+        except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+            # Written by an incompatible version, or truncated by a pre-atomic
+            # writer from an older coderev. Either way it is unusable.
+            return [], _CORRUPT
+
+        if not isinstance(entries, list):
+            return [], _CORRUPT
+
+        return entries, _OK
+
+    def _load_month_file(self, path: Path) -> list[dict[str, Any]]:
+        """Load entries from a monthly history file, tolerating failure.
+
+        For the read-only queries this backs (get_all(), get_stats(), ...), a
+        month file that cannot be read degrades the answer but cannot destroy
+        anything, so an unreadable file is reported as empty. The read-modify-
+        write path in add() must NOT use this -- see _load_for_update().
+        """
+        entries, _state = self._load_entries(path)
+        return entries
+
+    def _load_for_update(self, path: Path) -> list[dict[str, Any]]:
+        """Load a month file that is about to be rewritten with a new entry.
+
+        Unlike _load_month_file(), this refuses to silently return [] for a file
+        it could not read: the caller appends to the result and writes it back,
+        so "[]" would mean erasing the month rather than merely under-reporting.
+
+        A file whose bytes *were* read and are garbage is quarantined alongside
+        itself (see CORRUPT_SUFFIX) instead of being overwritten in place, so
+        the unparseable content survives for manual recovery and the new entry
+        still gets recorded.
+
+        Raises:
+            HistoryWriteError: If the file exists but could not be read.
+        """
+        entries, state = self._load_entries(path)
+
+        if state == _UNREADABLE:
+            raise HistoryWriteError(
+                f"Could not read existing history file {path}; refusing to "
+                f"overwrite it, as that would discard the reviews it holds."
+            )
+
+        if state == _CORRUPT:
+            quarantine = path.with_name(path.name + CORRUPT_SUFFIX)
+            try:
+                os.replace(path, quarantine)
+            except OSError:
+                raise HistoryWriteError(
+                    f"History file {path} is corrupt and could not be moved "
+                    f"aside; refusing to overwrite it."
+                ) from None
             return []
-    
+
+        return entries
+
     def _save_month_file(self, path: Path, entries: list[dict[str, Any]]) -> None:
-        """Save entries to a monthly history file."""
+        """Save entries to a monthly history file, atomically.
+
+        The history dir is shared between concurrent reviews (async batches, a
+        pre-commit hook running alongside a CI review, two coderev processes).
+        Writing JSON straight into the destination truncates it first, leaving a
+        window where a reader sees a partial file -- and since a torn read used
+        to come back as "no entries", the next add() would write back a
+        single-entry month, destroying every review recorded that month.
+
+        Instead, stage the content in a temp file in the same directory (same
+        filesystem, so the rename cannot cross devices) and swap it in with
+        os.replace(), which is atomic on both POSIX and Windows. A reader
+        therefore only ever observes the old file or the new one.
+
+        Raises:
+            OSError: If the file could not be written or swapped into place. The
+                destination is left untouched and no temp file survives.
+        """
         data = {
             "version": 1,
             "updated": datetime.now(timezone.utc).isoformat(),
             "entries": entries,
         }
-        
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, default=str)
-    
+
+        fd, tmp_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=TEMP_SUFFIX,
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+
+            last_error: PermissionError | None = None
+            for attempt in range(_RETRY_ATTEMPTS):
+                try:
+                    os.replace(tmp_path, path)
+                    return
+                except PermissionError as exc:  # Windows: reader holds it open
+                    last_error = exc
+                    time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+            raise last_error  # type: ignore[misc]
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
     def add(
         self,
         result: ReviewResult,
@@ -267,13 +443,17 @@ class ReviewHistory:
             focus: Focus areas used for the review.
             content: The reviewed content (for deduplication).
             duration_ms: Time taken for the review.
-            
+
         Returns:
             The created ReviewEntry, or None if history is disabled.
+
+        Raises:
+            HistoryWriteError: If the existing month file could not be read, in
+                which case nothing is written and the stored history is intact.
         """
         if not self.enabled:
             return None
-        
+
         # Create entry
         entry = ReviewEntry.from_review_result(
             result=result,
@@ -284,11 +464,12 @@ class ReviewHistory:
             content=content,
             duration_ms=duration_ms,
         )
-        
-        # Load current month's file
+
+        # Load current month's file. Strictly: appending to a month we failed to
+        # read would write back a month containing only this entry.
         month_file = self._get_month_file()
-        entries = self._load_month_file(month_file)
-        
+        entries = self._load_for_update(month_file)
+
         # Add new entry
         entries.append(entry.to_dict())
         
@@ -299,13 +480,7 @@ class ReviewHistory:
     
     def get_all(self) -> Iterator[ReviewEntry]:
         """Iterate over all review entries in chronological order."""
-        # Find all month files
-        if not self.history_dir.exists():
-            return
-        
-        month_files = sorted(self.history_dir.glob("reviews_*.json"))
-        
-        for path in month_files:
+        for path in self._month_files():
             entries = self._load_month_file(path)
             for entry_data in entries:
                 yield ReviewEntry.from_dict(entry_data)
@@ -319,13 +494,12 @@ class ReviewHistory:
         Returns:
             List of ReviewEntry objects, most recent first.
         """
-        if not self.enabled or not self.history_dir.exists():
+        if not self.enabled:
             return []
-        
+
         entries: list[ReviewEntry] = []
-        month_files = sorted(self.history_dir.glob("reviews_*.json"), reverse=True)
-        
-        for path in month_files:
+
+        for path in reversed(self._month_files()):
             if len(entries) >= limit:
                 break
             
@@ -516,15 +690,31 @@ class ReviewHistory:
         Returns:
             Number of entries cleared.
         """
-        if not self.enabled or not self.history_dir.exists():
+        if not self.enabled:
             return 0
-        
+
         count = 0
-        for path in self.history_dir.glob("reviews_*.json"):
+        for path in self._month_files():
             entries = self._load_month_file(path)
+            try:
+                path.unlink()
+            except OSError:
+                # Another process holds it open, or already removed it. Do not
+                # count entries we did not actually clear.
+                continue
             count += len(entries)
-            path.unlink()
-        
+
+        if not self.history_dir.exists():
+            return count
+
+        # Sweep temp files left behind by a writer that was killed mid-write.
+        # They are not month files, so they are removed but not counted.
+        for tmp_file in self.history_dir.glob(f"*{TEMP_SUFFIX}"):
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass
+
         return count
     
     def export(self, output_path: Path | str) -> int:
@@ -575,8 +765,8 @@ class ReviewHistory:
             # Determine which month file to add to
             entry_dt = entry.datetime
             month_file = self._get_month_file(entry_dt)
-            entries = self._load_month_file(month_file)
-            
+            entries = self._load_for_update(month_file)
+
             # Check for duplicates by ID
             existing_ids = {e.get("id") for e in entries}
             if entry.id not in existing_ids:
