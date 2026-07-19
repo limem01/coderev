@@ -184,65 +184,69 @@ class AutoFixer:
         
         applied: list[InlineSuggestion] = []
         skipped: list[tuple[InlineSuggestion, str]] = []
-        
+
         # Track which lines have been modified
         modified_lines: set[int] = set()
-        
-        # Track line offset due to insertions/deletions
-        line_offset = 0
-        
+
+        # Phase 1: decide which suggestions to accept, in severity order so the
+        # highest-severity fix wins any overlap. Line numbers are validated
+        # against the *original* code, which is the coordinate space the model
+        # reported them in.
+        accepted: list[InlineSuggestion] = []
+
         for suggestion in sorted_suggestions:
             # Check if we should apply this fix
             should_apply, reason = self._should_apply_fix(suggestion)
             if not should_apply:
                 skipped.append((suggestion, reason))
                 continue
-            
-            # Check for overlap with already-modified lines
+
+            # Check for overlap with already-accepted lines
             affected_range = range(suggestion.start_line, suggestion.end_line + 1)
             if any(line in modified_lines for line in affected_range):
                 skipped.append((suggestion, "Overlaps with already-applied fix"))
                 continue
-            
-            # Apply the fix
+
+            if suggestion.start_line < 1 or suggestion.end_line > len(lines):
+                skipped.append((suggestion, f"Line numbers out of range"))
+                continue
+
+            modified_lines.update(affected_range)
+            accepted.append(suggestion)
+
+        # Phase 2: splice the accepted edits in bottom-up. Editing from the last
+        # line backwards means an edit never shifts the indices of the ones still
+        # to come, so no running offset is needed. (Applying in severity order
+        # with a single cumulative offset silently corrupted the file whenever a
+        # later fix sat *above* an earlier one that changed the line count.)
+        for suggestion in sorted(accepted, key=lambda s: s.start_line, reverse=True):
             try:
-                # Adjust line numbers for offset
-                start_idx = suggestion.start_line - 1 + line_offset
-                end_idx = suggestion.end_line + line_offset
-                
-                if start_idx < 0 or end_idx > len(lines):
-                    skipped.append((suggestion, f"Line numbers out of range"))
-                    continue
-                
+                start_idx = suggestion.start_line - 1
+                end_idx = suggestion.end_line
+
                 # Get the original lines being replaced
                 original_lines = lines[start_idx:end_idx]
-                
+
                 # Prepare the replacement
                 suggested_lines = suggestion.suggested_code.splitlines(keepends=True)
-                
+
                 # Ensure suggested lines end with newlines (except possibly last)
                 if suggested_lines and not suggested_lines[-1].endswith('\n'):
                     # Check if original last line had a newline
                     if original_lines and original_lines[-1].endswith('\n'):
                         suggested_lines[-1] += '\n'
-                
+
                 # Replace lines
                 lines[start_idx:end_idx] = suggested_lines
-                
-                # Update offset for future fixes
-                original_count = end_idx - start_idx
-                new_count = len(suggested_lines)
-                line_offset += new_count - original_count
-                
-                # Mark lines as modified
-                for line_num in affected_range:
-                    modified_lines.add(line_num)
-                
+
                 applied.append(suggestion)
-                
+
             except Exception as e:
                 skipped.append((suggestion, f"Error applying fix: {e}"))
-        
+
+        # Report applied fixes in severity order, as callers expect
+        applied.sort(key=lambda s: (-s.severity.weight, s.start_line))
+
         # Reconstruct code
         fixed_code = ''.join(lines)
         
