@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from coderev.languages import detect_language
 from coderev.prompts import SYSTEM_PROMPT, build_review_prompt
 from coderev.reviewer import is_binary_file
 
@@ -691,29 +692,4 @@ class CostEstimator:
 
     def _detect_language(self, file_path: Path) -> str | None:
         """Detect programming language from file extension."""
-        extension_map = {
-            ".py": "python",
-            ".js": "javascript",
-            ".ts": "typescript",
-            ".tsx": "typescript",
-            ".jsx": "javascript",
-            ".go": "go",
-            ".rs": "rust",
-            ".rb": "ruby",
-            ".java": "java",
-            ".kt": "kotlin",
-            ".cpp": "cpp",
-            ".c": "c",
-            ".h": "c",
-            ".hpp": "cpp",
-            ".cs": "csharp",
-            ".php": "php",
-            ".swift": "swift",
-            ".sql": "sql",
-            ".sh": "bash",
-            ".yaml": "yaml",
-            ".yml": "yaml",
-            ".json": "json",
-            ".md": "markdown",
-        }
-        return extension_map.get(file_path.suffix.lower())
+        return detect_language(file_path)

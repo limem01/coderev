@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 import httpx
 
 from coderev.config import Config
+# Re-exported for backwards compatibility; callers do
+# ``from coderev.github import detect_language_from_filename``.
+from coderev.languages import detect_language_from_filename
 
 
 @dataclass
@@ -160,33 +163,3 @@ class GitHubClient:
         )
         response.raise_for_status()
         return response.json()
-
-
-def detect_language_from_filename(filename: str) -> str:
-    """Detect language from filename for GitHub files."""
-    extension_map = {
-        ".py": "python",
-        ".js": "javascript",
-        ".ts": "typescript",
-        ".tsx": "typescript",
-        ".jsx": "javascript",
-        ".go": "go",
-        ".rs": "rust",
-        ".rb": "ruby",
-        ".java": "java",
-        ".kt": "kotlin",
-        ".cpp": "cpp",
-        ".c": "c",
-        ".h": "c",
-        ".hpp": "cpp",
-        ".cs": "csharp",
-        ".php": "php",
-        ".swift": "swift",
-        ".sql": "sql",
-        ".sh": "bash",
-    }
-    
-    for ext, lang in extension_map.items():
-        if filename.endswith(ext):
-            return lang
-    return ""
