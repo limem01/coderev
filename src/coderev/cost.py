@@ -145,6 +145,50 @@ def count_tokens_approximate(text: str) -> int:
     return int(adjusted_count)
 
 
+def _strip_routing_prefixes(model: str) -> str:
+    """Reduce a provider/router-decorated model id to its bare model name.
+
+    Mirrors the prefix peeling in :func:`_resolve_pricing` so that encoding
+    selection and pricing agree on what the underlying model is. Without this,
+    a routed OpenAI id such as ``openai/gpt-4o-mini`` or ``azure/gpt-4o`` never
+    matches the ``gpt-4o`` prefix in :func:`_fallback_encoding_name` and wrongly
+    falls back to ``cl100k_base`` instead of ``o200k_base``. Strips:
+
+    - slash-separated router segments, taking the final one
+      (LiteLLM/OpenRouter/Azure: ``openai/gpt-4o``,
+      ``openrouter/openai/gpt-4o``, ``azure/gpt-4o``);
+    - dot-separated cloud vendor/region tokens peeled from the left
+      (Bedrock cross-region profiles: ``us.anthropic.claude-...``);
+    - a trailing Bedrock ``:<digits>`` inference-profile version (``...-v1:0``);
+    - a trailing Vertex ``@<date>`` version (``...@20240620``).
+
+    Args:
+        model: The (possibly routed) model id.
+
+    Returns:
+        The bare model name with routing decoration removed.
+    """
+    # Slash-separated router segments: keep everything after the last '/'.
+    if "/" in model:
+        model = model.rsplit("/", 1)[1]
+    # Dot-separated cloud vendor/region tokens, peeled from the left. Matched
+    # exactly against the known set so real alias dots ("gpt-3.5", "gpt-4.1",
+    # "claude-3.5-sonnet") survive.
+    while True:
+        head, dot, rest = model.partition(".")
+        if dot and rest and head.lower() in _CLOUD_PROVIDER_PREFIXES:
+            model = rest
+            continue
+        break
+    # Trailing Bedrock ":<digits>" inference-profile version.
+    base, sep, tail = model.rpartition(":")
+    if sep and base and tail.isdigit():
+        model = base
+    # Trailing Vertex "@<date>" version.
+    model = model.partition("@")[0]
+    return model
+
+
 def _fallback_encoding_name(model: str) -> str:
     """Pick the right base encoding when tiktoken has no mapping for a model.
 
@@ -157,13 +201,16 @@ def _fallback_encoding_name(model: str) -> str:
     estimates. Choose ``o200k_base`` for those families and keep
     ``cl100k_base`` only for the older GPT-4 / GPT-3.5 / legacy models.
 
+    Routing prefixes are stripped first (:func:`_strip_routing_prefixes`) so a
+    routed id like ``openai/gpt-4o-mini`` is classified by its bare model name.
+
     Args:
         model: The model name (any case).
 
     Returns:
         The name of the tiktoken base encoding to fall back to.
     """
-    model_lower = model.lower()
+    model_lower = _strip_routing_prefixes(model).lower()
     # o200k_base models: GPT-4o, GPT-4.1, GPT-5, and the o1/o3/o4 reasoning
     # series. Match "gpt-4o" before plain "gpt-4" so gpt-4o* doesn't get the
     # cl100k default, and gate the bare o-series on a token boundary so a
@@ -196,12 +243,23 @@ def count_tokens_tiktoken(text: str, model: str) -> int | None:
         # Try to get encoding for the specific model
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
-        # No mapping for this (usually too-new) model: fall back to the base
-        # encoding its family actually uses, not always cl100k_base.
-        try:
-            encoding = tiktoken.get_encoding(_fallback_encoding_name(model))
-        except Exception:
-            return None
+        encoding = None
+        # A routed id ("openai/gpt-4o-mini", "azure/gpt-4o") has no mapping, but
+        # its bare form often does -- try that for an exact encoding before
+        # guessing a base encoding.
+        bare = _strip_routing_prefixes(model)
+        if bare != model:
+            try:
+                encoding = tiktoken.encoding_for_model(bare)
+            except KeyError:
+                encoding = None
+        if encoding is None:
+            # Still no mapping (usually a too-new model): fall back to the base
+            # encoding its family actually uses, not always cl100k_base.
+            try:
+                encoding = tiktoken.get_encoding(_fallback_encoding_name(model))
+            except Exception:
+                return None
 
     try:
         return len(encoding.encode(text))

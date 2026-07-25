@@ -17,7 +17,11 @@ import types
 
 import pytest
 
-from coderev.cost import _fallback_encoding_name, count_tokens_tiktoken
+from coderev.cost import (
+    _fallback_encoding_name,
+    _strip_routing_prefixes,
+    count_tokens_tiktoken,
+)
 
 
 class TestFallbackEncodingName:
@@ -72,6 +76,60 @@ class TestFallbackEncodingName:
         # A token that merely starts with "o1" letters but is unrelated should
         # not trigger the o-series branch.
         assert _fallback_encoding_name("omni-model") == "cl100k_base"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "openai/gpt-4o-mini",  # LiteLLM/OpenRouter
+            "azure/gpt-4o",  # Azure OpenAI deployment prefix
+            "openrouter/openai/gpt-4o",  # multi-level router prefix
+            "openai/o3-mini",
+            "openai/gpt-4o-2099-01-01",  # routed + too-new dated id
+        ],
+    )
+    def test_routed_ids_classified_by_bare_name(self, model):
+        # A routing prefix must not knock a gpt-4o / o-series model off the
+        # o200k_base encoding (regression: prefixes were previously not
+        # stripped, so these wrongly resolved to cl100k_base).
+        assert _fallback_encoding_name(model) == "o200k_base"
+
+    def test_routed_legacy_stays_cl100k(self):
+        assert _fallback_encoding_name("openai/gpt-4-turbo") == "cl100k_base"
+
+
+class TestStripRoutingPrefixes:
+    """_strip_routing_prefixes reduces a routed id to its bare model name."""
+
+    @pytest.mark.parametrize(
+        "routed,bare",
+        [
+            ("openai/gpt-4o-mini", "gpt-4o-mini"),
+            ("azure/gpt-4o", "gpt-4o"),
+            ("openrouter/openai/gpt-4o", "gpt-4o"),
+            # Region/vendor tokens and the trailing ":0" version peel; the
+            # "-v1" version token is left for longest-prefix pricing to resolve.
+            ("us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+             "claude-3-5-sonnet-20240620-v1"),
+            ("anthropic.claude-3-5-sonnet-20240620-v1:0",
+             "claude-3-5-sonnet-20240620-v1"),
+            ("claude-3-5-sonnet@20240620", "claude-3-5-sonnet"),
+        ],
+    )
+    def test_strips(self, routed, bare):
+        assert _strip_routing_prefixes(routed) == bare
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gpt-4o-mini",  # already bare
+            "gpt-3.5-turbo",  # alias dot must survive
+            "gpt-4.1",  # version dot must survive
+            "claude-3.5-sonnet",  # vendor-less alias dot survives
+            "o3-mini",
+        ],
+    )
+    def test_leaves_bare_models_untouched(self, model):
+        assert _strip_routing_prefixes(model) == model
 
 
 class _FakeEncoding:
@@ -148,3 +206,20 @@ class TestCountTokensTiktokenFallback:
         # Simulate tiktoken not being installed.
         monkeypatch.setitem(sys.modules, "tiktoken", None)
         assert count_tokens_tiktoken("anything", "o3-mini") is None
+
+    def test_routed_id_uses_bare_exact_encoding(self, monkeypatch):
+        # The full routed id has no mapping, but the bare model does -- the bare
+        # exact encoding must be used instead of a base-encoding guess.
+        recorded = _install_fake_tiktoken(
+            monkeypatch, known_models={"gpt-4o-mini"}
+        )
+        count = count_tokens_tiktoken("a b c", "openai/gpt-4o-mini")
+        assert "get_encoding" not in recorded  # no base-encoding fallback
+        assert count == 3
+
+    def test_routed_unknown_falls_back_to_o200k(self, monkeypatch):
+        # Neither the routed id nor its bare form is known -> base-encoding
+        # fallback, and it must be o200k_base for a gpt-4o model.
+        recorded = _install_fake_tiktoken(monkeypatch, known_models=set())
+        count_tokens_tiktoken("a b c d", "azure/gpt-4o-2099-01-01")
+        assert recorded["get_encoding"] == "o200k_base"
