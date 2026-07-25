@@ -145,13 +145,45 @@ def count_tokens_approximate(text: str) -> int:
     return int(adjusted_count)
 
 
+def _fallback_encoding_name(model: str) -> str:
+    """Pick the right base encoding when tiktoken has no mapping for a model.
+
+    ``tiktoken.encoding_for_model`` raises ``KeyError`` for models newer than
+    the installed tiktoken release (e.g. ``o3-mini``/``o4-mini`` on an older
+    build). Falling back to ``cl100k_base`` for those is wrong: the o-series
+    reasoning models and the GPT-4o / GPT-4.1 / GPT-5 families use the
+    ``o200k_base`` vocabulary, which tokenizes code noticeably differently, so
+    a ``cl100k_base`` guess yields inaccurate counts and thus wrong cost
+    estimates. Choose ``o200k_base`` for those families and keep
+    ``cl100k_base`` only for the older GPT-4 / GPT-3.5 / legacy models.
+
+    Args:
+        model: The model name (any case).
+
+    Returns:
+        The name of the tiktoken base encoding to fall back to.
+    """
+    model_lower = model.lower()
+    # o200k_base models: GPT-4o, GPT-4.1, GPT-5, and the o1/o3/o4 reasoning
+    # series. Match "gpt-4o" before plain "gpt-4" so gpt-4o* doesn't get the
+    # cl100k default, and gate the bare o-series on a token boundary so a
+    # model like "gpt-4o1" is not mistaken for one.
+    if model_lower.startswith(("gpt-4o", "chatgpt-4o", "gpt-4.1", "gpt-5")):
+        return "o200k_base"
+    for series in ("o1", "o3", "o4"):
+        if model_lower == series or model_lower.startswith(series + "-"):
+            return "o200k_base"
+    # Older GPT-4 / GPT-3.5-turbo / davinci / curie.
+    return "cl100k_base"
+
+
 def count_tokens_tiktoken(text: str, model: str) -> int | None:
     """Count tokens using tiktoken (for OpenAI models).
-    
+
     Args:
         text: The text to count tokens for.
         model: The model name to get encoding for.
-        
+
     Returns:
         Token count, or None if tiktoken is not available.
     """
@@ -159,17 +191,18 @@ def count_tokens_tiktoken(text: str, model: str) -> int | None:
         import tiktoken
     except ImportError:
         return None
-    
+
     try:
         # Try to get encoding for the specific model
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
-        # Fall back to cl100k_base (GPT-4, GPT-3.5-turbo)
+        # No mapping for this (usually too-new) model: fall back to the base
+        # encoding its family actually uses, not always cl100k_base.
         try:
-            encoding = tiktoken.get_encoding("cl100k_base")
+            encoding = tiktoken.get_encoding(_fallback_encoding_name(model))
         except Exception:
             return None
-    
+
     try:
         return len(encoding.encode(text))
     except Exception:
