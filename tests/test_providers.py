@@ -193,6 +193,61 @@ class TestBaseProviderJSONParsing:
         assert result["score"] == 85
         assert len(result["issues"]) == 1
 
+    def test_parse_json_with_surrounding_prose(self):
+        """JSON wrapped in prose but without a code fence."""
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        content = 'Here is the review you asked for:\n{"score": 90}\nHope it helps!'
+        result = provider.parse_json_response(content)
+        assert result == {"score": 90}
+
+    def test_parse_json_with_backtick_fence_in_string_value(self):
+        """A string value that itself contains a ``` code fence must not
+        truncate the object (regression for the non-greedy fence regex)."""
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        suggestion = "Use ```python\\nprint()\\n``` instead"
+        content = f'```json\n{{"summary": "{suggestion}", "score": 70}}\n```'
+        result = provider.parse_json_response(content)
+        assert result["score"] == 70
+        assert "```python" in result["summary"]
+
+    def test_parse_json_fence_with_backticks_no_lang(self):
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        content = '```\n{"note": "run ```sh\\nls\\n``` here"}\n```'
+        result = provider.parse_json_response(content)
+        assert result["note"] == "run ```sh\nls\n``` here"
+
+    def test_parse_json_top_level_array(self):
+        provider = OpenAIProvider(api_key="key", model="gpt-4")
+        content = 'Findings: [{"line": 1}, {"line": 2}]'
+        result = provider.parse_json_response(content)
+        assert result == [{"line": 1}, {"line": 2}]
+
+    def test_parse_json_truncated_trailing_comma(self):
+        """Output cut off at the token limit mid-object gets repaired."""
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        content = '{"summary": "ok", "issues": [1, 2,'
+        result = provider.parse_json_response(content)
+        assert result == {"summary": "ok", "issues": [1, 2]}
+
+    def test_parse_json_truncated_open_string(self):
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        content = '{"summary": "the review was cut off here'
+        result = provider.parse_json_response(content)
+        assert result["summary"].startswith("the review was cut off")
+
+    def test_parse_json_brace_inside_string_not_counted(self):
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        content = '{"code": "if (x) { return y; }", "ok": true}'
+        result = provider.parse_json_response(content)
+        assert result["code"] == "if (x) { return y; }"
+        assert result["ok"] is True
+
+    def test_parse_json_escaped_quote_in_string(self):
+        provider = AnthropicProvider(api_key="key", model="claude-3")
+        content = 'text {"msg": "she said \\"hi\\" loudly"} more text'
+        result = provider.parse_json_response(content)
+        assert result["msg"] == 'she said "hi" loudly'
+
 
 class TestConfigProviderIntegration:
     """Tests for Config integration with providers."""

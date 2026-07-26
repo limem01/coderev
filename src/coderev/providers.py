@@ -6,13 +6,109 @@ Supports multiple AI providers (Anthropic, OpenAI) through a unified interface.
 from __future__ import annotations
 
 import json
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from coderev.config import Config
+
+
+def _extract_json_span(content: str) -> tuple[str, bool] | None:
+    """Find the first balanced (or truncated) top-level JSON value.
+
+    Scans from the first ``{`` or ``[`` while tracking nesting depth, honoring
+    string literals (so braces, brackets, and ```` ``` ```` fences inside a
+    string value do not affect depth) and backslash escapes inside strings.
+
+    Returns a ``(substring, complete)`` tuple where ``complete`` is ``True``
+    when the value's brackets closed cleanly, or ``None`` if no opening bracket
+    is present at all. A truncated value returns the remainder with
+    ``complete=False`` so the caller can attempt repair.
+    """
+    start = None
+    for i, ch in enumerate(content):
+        if ch in "{[":
+            start = i
+            break
+    if start is None:
+        return None
+
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    closers = {"{": "}", "[": "]"}
+
+    for i in range(start, len(content)):
+        ch = content[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(closers[ch])
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+                if not stack:
+                    return content[start : i + 1], True
+            else:
+                # Unbalanced closer: bail out at the first structural break.
+                return content[start : i + 1], False
+
+    return content[start:], False
+
+
+def _repair_truncated_json(candidate: str) -> str | None:
+    """Best-effort repair of JSON truncated mid-object (e.g. token limit).
+
+    Closes an unterminated string and appends the matching closing brackets
+    for anything still open, in reverse order. Returns ``None`` when there is
+    nothing to close (so the caller does not retry an unchanged string).
+    """
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    closers = {"{": "}", "[": "]"}
+
+    for ch in candidate:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(closers[ch])
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+
+    # Drop a dangling trailing comma / colon that would break parsing once we
+    # close the structure (e.g. '{"a": 1,' or '{"a":').
+    repaired = candidate
+    if in_string:
+        repaired += '"'
+    trimmed = repaired.rstrip()
+    if trimmed and trimmed[-1] in ",:":
+        repaired = trimmed[:-1]
+
+    if not stack:
+        return None if not in_string else repaired
+
+    repaired += "".join(reversed(stack))
+    return repaired
 
 
 @dataclass
@@ -123,33 +219,66 @@ class BaseProvider(ABC):
         pass
     
     def parse_json_response(self, content: str) -> dict[str, Any]:
-        """Parse JSON from response, handling markdown code blocks.
-        
+        """Parse JSON from a model response.
+
+        Handles the common ways a model wraps its JSON answer:
+
+        - A bare object/array (the fast path).
+        - JSON fenced in a ```` ```json ```` / ```` ``` ```` code block.
+        - JSON surrounded by prose ("Here is the review: {...}").
+        - JSON whose *string values* themselves contain a ```` ``` ```` code
+          fence — the previous non-greedy ``` ```...``` ``` regex truncated the
+          object at the first inner backtick fence, so a review whose
+          suggestion contained a fenced snippet failed to parse.
+        - Truncated output (hit the token limit mid-object): the still-open
+          strings and brackets are closed and re-parsed as a best effort.
+
+        Rather than trusting a fence regex, this scans for the first balanced
+        JSON value with a brace matcher that skips over braces/backticks inside
+        string literals, so an inner ``` fence is treated as string content.
+
         Args:
             content: Raw response content from the model.
-            
+
         Returns:
             Parsed JSON as a dictionary.
-            
+
         Raises:
             ValueError: If JSON cannot be parsed.
         """
-        # Extract JSON from response (handle markdown code blocks)
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
-        if json_match:
-            content = json_match.group(1)
-        
+        # Fast path: the whole response is already valid JSON.
+        stripped = content.strip()
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            # Try to salvage partial JSON
-            content = content.strip()
-            if not content.endswith("}"):
-                content += "}"
-            try:
-                return json.loads(content)
-            except json.JSONDecodeError:
-                raise ValueError(f"Failed to parse API response as JSON: {e}")
+            return json.loads(stripped)
+        except json.JSONDecodeError as fast_error:
+            first_error = fast_error
+
+        # Locate the first balanced (or truncated) top-level object/array,
+        # ignoring any surrounding prose and code fences.
+        span = _extract_json_span(content)
+        if span is None:
+            raise ValueError(
+                f"Failed to parse API response as JSON: {first_error}"
+            )
+
+        candidate, complete = span
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # Salvage truncated output by closing any open strings/brackets.
+        if not complete:
+            repaired = _repair_truncated_json(candidate)
+            if repaired is not None:
+                try:
+                    return json.loads(repaired)
+                except json.JSONDecodeError:
+                    pass
+
+        raise ValueError(
+            f"Failed to parse API response as JSON: {first_error}"
+        )
 
 
 class AnthropicProvider(BaseProvider):
