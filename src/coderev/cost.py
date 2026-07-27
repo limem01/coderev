@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from coderev.config import detect_provider
 from coderev.languages import detect_language
 from coderev.prompts import SYSTEM_PROMPT, build_review_prompt
 from coderev.reviewer import is_binary_file
@@ -281,14 +282,19 @@ def count_tokens(text: str, model: str = "claude-3-sonnet") -> int:
     Returns:
         Estimated token count.
     """
-    model_lower = model.lower()
-    
-    # Try tiktoken for OpenAI models
-    if any(prefix in model_lower for prefix in ["gpt-", "o1", "o3", "o4", "davinci", "curie"]):
+    # Try tiktoken for OpenAI models. Route via config.detect_provider -- the
+    # single source of truth for provider detection -- instead of a private
+    # substring list. The old ``any(prefix in model_lower for prefix in ...)``
+    # was a third, drifted copy that used unanchored substring matching: it
+    # would misroute any id merely *containing* "o1"/"o3"/"o4"/"gpt-" (e.g. the
+    # non-existent-but-plausible "o1pro", or a foreign id with "gpt-" mid-name)
+    # to tiktoken, while detect_provider gates the o-series on a token boundary
+    # (bare name or "<family>-...") and peels router prefixes ("openai/o3-mini").
+    if detect_provider(model) == "openai":
         tiktoken_count = count_tokens_tiktoken(text, model)
         if tiktoken_count is not None:
             return tiktoken_count
-    
+
     # Fall back to approximation
     return count_tokens_approximate(text)
 
