@@ -15,25 +15,50 @@ DEFAULT_FOCUS_AREAS = ["bugs", "security", "performance"]
 DEFAULT_MODEL = "claude-3-sonnet-20240229"
 DEFAULT_MAX_FILE_SIZE = 100_000  # 100KB
 
-# Provider detection based on model prefix
-OPENAI_MODEL_PREFIXES = ("gpt-", "o1", "davinci", "curie", "babbage")
+# Provider detection based on model prefix.
+# Plain string prefixes match at the start of the (router-stripped) model id.
+OPENAI_MODEL_PREFIXES = ("gpt-", "davinci", "curie", "babbage")
+# OpenAI's o-series reasoning models (o1, o3, o4, ...). Matched on a token
+# boundary -- the bare family name or "<family>-..." -- so "o3-mini" routes to
+# OpenAI while an unrelated id that merely begins with those two characters
+# does not. The old ("o1",) prefix missed o3/o4 entirely, so "o3-mini" and
+# "o4-mini" fell through to the Anthropic default even though cost estimation
+# already prices and tokenizes them as OpenAI models.
+OPENAI_O_SERIES = ("o1", "o3", "o4")
 ANTHROPIC_MODEL_PREFIXES = ("claude",)
+
+
+def _strip_router_prefix(model: str) -> str:
+    """Drop leading ``provider/`` routing segments (LiteLLM, OpenRouter, Azure).
+
+    ``openai/o3-mini`` -> ``o3-mini`` and
+    ``openrouter/anthropic/claude-3.5-sonnet`` -> ``claude-3.5-sonnet``, so a
+    routed id is classified by its bare model name. Bedrock/Vertex ids are
+    dot-separated and keep their vendor token, which the ``claude``/``gpt-``
+    matching already covers.
+    """
+    return model.rsplit("/", 1)[-1]
 
 
 def detect_provider(model: str) -> str:
     """Detect provider from model name.
-    
+
     Args:
         model: Model name/identifier.
-        
+
     Returns:
         Provider name ('anthropic' or 'openai').
     """
-    model_lower = model.lower()
-    
+    model_lower = _strip_router_prefix(model.lower())
+
     if any(model_lower.startswith(p) for p in OPENAI_MODEL_PREFIXES):
         return "openai"
-    
+    if any(
+        model_lower == series or model_lower.startswith(series + "-")
+        for series in OPENAI_O_SERIES
+    ):
+        return "openai"
+
     # Default to anthropic
     return "anthropic"
 

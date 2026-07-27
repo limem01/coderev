@@ -594,22 +594,20 @@ def get_provider(
 
 def detect_provider_from_model(model: str) -> str:
     """Detect the provider based on model name.
-    
+
+    Delegates to :func:`coderev.config.detect_provider` so provider routing has
+    a single source of truth. The previous copy here matched families with a
+    loose substring test (``"o1" in model_lower``) and, like the config copy,
+    never recognized the ``o3``/``o4`` reasoning series -- so ``o3-mini`` and
+    ``o4-mini`` were sent to the Anthropic client even though cost estimation
+    already treats them as OpenAI models.
+
     Args:
         model: Model name/identifier.
-        
+
     Returns:
         Provider name ('anthropic' or 'openai').
     """
-    model_lower = model.lower()
-    
-    # OpenAI models
-    if any(prefix in model_lower for prefix in ["gpt-", "o1", "davinci", "curie", "babbage"]):
-        return "openai"
-    
-    # Anthropic models (default)
-    if any(prefix in model_lower for prefix in ["claude", "anthropic"]):
-        return "anthropic"
-    
-    # Default to anthropic for backwards compatibility
-    return "anthropic"
+    from coderev.config import detect_provider
+
+    return detect_provider(model)
