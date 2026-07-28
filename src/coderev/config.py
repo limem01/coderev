@@ -17,7 +17,11 @@ DEFAULT_MAX_FILE_SIZE = 100_000  # 100KB
 
 # Provider detection based on model prefix.
 # Plain string prefixes match at the start of the (router-stripped) model id.
-OPENAI_MODEL_PREFIXES = ("gpt-", "davinci", "curie", "babbage")
+# "chatgpt-" covers OpenAI's ChatGPT-tuned ids (e.g. "chatgpt-4o-latest"),
+# which don't start with "gpt-" and so would otherwise fall through to the
+# Anthropic default -- an immediate auth/model error for anyone using them,
+# even though cost estimation already tokenizes/prices "chatgpt-4o" as OpenAI.
+OPENAI_MODEL_PREFIXES = ("gpt-", "chatgpt-", "davinci", "curie", "babbage")
 # OpenAI's o-series reasoning models (o1, o3, o4, ...). Matched on a token
 # boundary -- the bare family name or "<family>-..." -- so "o3-mini" routes to
 # OpenAI while an unrelated id that merely begins with those two characters

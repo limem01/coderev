@@ -55,6 +55,8 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-4-turbo": (10.00, 30.00),
     "gpt-4-turbo-preview": (10.00, 30.00),
     "gpt-4o": (2.50, 10.00),
+    # ChatGPT-4o (OpenAI's "chatgpt-4o-latest") bills at the gpt-4o rate.
+    "chatgpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-3.5-turbo": (0.50, 1.50),
     # OpenAI GPT-4.1 family
