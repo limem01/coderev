@@ -60,6 +60,56 @@ EXTENSION_MAP: dict[str, str] = {
 }
 
 
+# Human-written language aliases → the canonical names used as values in
+# ``EXTENSION_MAP`` (and therefore emitted by :func:`detect_language`). Users
+# write these freely in custom-rule YAML (``languages: [C++, golang, js]``), so
+# a rule keyed on an alias must still match a file that ``detect_language``
+# labels with the canonical name. Keys are lowercase; a name already canonical
+# maps to itself implicitly (an unknown name is returned unchanged), so this map
+# only needs to list the *aliases*.
+LANGUAGE_ALIASES: dict[str, str] = {
+    "py": "python",
+    "python3": "python",
+    "js": "javascript",
+    "node": "javascript",
+    "nodejs": "javascript",
+    "ecmascript": "javascript",
+    "ts": "typescript",
+    "golang": "go",
+    "rs": "rust",
+    "rb": "ruby",
+    "kt": "kotlin",
+    "c++": "cpp",
+    "cplusplus": "cpp",
+    "cs": "csharp",
+    "c#": "csharp",
+    "sh": "bash",
+    "shell": "bash",
+    "zsh": "bash",
+    "yml": "yaml",
+    "md": "markdown",
+}
+
+
+def normalize_language(name: str) -> str:
+    """Fold a human-written language name to its canonical form.
+
+    Lowercases and strips ``name``, then maps common aliases (``c++`` → ``cpp``,
+    ``golang`` → ``go``, ``js`` → ``javascript``, ...) to the canonical names
+    :func:`detect_language` emits. A name that is already canonical, or simply
+    unrecognized, is returned lowercased/stripped and otherwise unchanged, so
+    exact matches keep working and no valid input is dropped.
+
+    Args:
+        name: A language name, possibly an alias or differently cased.
+
+    Returns:
+        The canonical language name.
+    """
+    key = name.strip().lower()
+    return LANGUAGE_ALIASES.get(key, key)
+
+
 def detect_language(path: Union[str, Path]) -> str | None:
     """Detect the language for a path's file extension.
 

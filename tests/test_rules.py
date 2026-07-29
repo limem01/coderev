@@ -127,7 +127,52 @@ class TestRule:
         assert rule.applies_to_language("Python") is True  # Case insensitive
         assert rule.applies_to_language("ruby") is True
         assert rule.applies_to_language("javascript") is False
-    
+
+    def test_applies_to_language_alias_declared_canonical_queried(self):
+        """A rule declared with an alias matches the canonical name that
+        ``detect_language`` emits (the value actually passed by the reviewer)."""
+        rule = Rule(
+            id="test",
+            name="Test",
+            description="Test",
+            languages=["C++", "golang", "js"],
+        )
+        # Canonical names as produced by coderev.languages.detect_language.
+        assert rule.applies_to_language("cpp") is True
+        assert rule.applies_to_language("go") is True
+        assert rule.applies_to_language("javascript") is True
+        # A language the rule does not target still does not match.
+        assert rule.applies_to_language("python") is False
+
+    def test_applies_to_language_alias_both_sides(self):
+        """Aliases on either side fold to the same canonical form."""
+        rule = Rule(
+            id="test",
+            name="Test",
+            description="Test",
+            languages=["python"],
+        )
+        assert rule.applies_to_language("py") is True
+        assert rule.applies_to_language("Python3") is True
+
+        rule2 = Rule(
+            id="t2", name="T2", description="T2", languages=["cpp"]
+        )
+        assert rule2.applies_to_language("c++") is True
+        assert rule2.applies_to_language("CPlusPlus") is True
+
+    def test_applies_to_language_canonical_still_works(self):
+        """Canonical-to-canonical matching is unaffected by normalization."""
+        rule = Rule(
+            id="test",
+            name="Test",
+            description="Test",
+            languages=["typescript", "csharp"],
+        )
+        assert rule.applies_to_language("typescript") is True
+        assert rule.applies_to_language("csharp") is True
+        assert rule.applies_to_language("go") is False
+
     def test_from_dict(self):
         """Test creating a rule from a dictionary."""
         data = {

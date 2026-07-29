@@ -6,8 +6,10 @@ import pytest
 
 from coderev.languages import (
     EXTENSION_MAP,
+    LANGUAGE_ALIASES,
     detect_language,
     detect_language_from_filename,
+    normalize_language,
 )
 
 
@@ -119,3 +121,55 @@ class TestSharedByAllModules:
         estimator = CostEstimator(model="claude-3-sonnet")
         assert estimator._detect_language(Path("a.scala")) == "scala"
         assert estimator._detect_language(Path("a.xyz")) is None
+
+
+class TestNormalizeLanguage:
+    """``normalize_language`` folds human aliases to canonical names."""
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("py", "python"),
+            ("python3", "python"),
+            ("js", "javascript"),
+            ("node", "javascript"),
+            ("nodejs", "javascript"),
+            ("ecmascript", "javascript"),
+            ("ts", "typescript"),
+            ("golang", "go"),
+            ("rs", "rust"),
+            ("rb", "ruby"),
+            ("kt", "kotlin"),
+            ("c++", "cpp"),
+            ("cplusplus", "cpp"),
+            ("cs", "csharp"),
+            ("c#", "csharp"),
+            ("sh", "bash"),
+            ("shell", "bash"),
+            ("zsh", "bash"),
+            ("yml", "yaml"),
+            ("md", "markdown"),
+        ],
+    )
+    def test_aliases_fold_to_canonical(self, name, expected):
+        assert normalize_language(name) == expected
+
+    def test_case_insensitive_and_stripped(self):
+        assert normalize_language("  C++  ") == "cpp"
+        assert normalize_language("GoLang") == "go"
+        assert normalize_language("Python") == "python"
+
+    def test_canonical_names_map_to_themselves(self):
+        # Every canonical name (a value in EXTENSION_MAP) is idempotent.
+        for canonical in set(EXTENSION_MAP.values()):
+            assert normalize_language(canonical) == canonical
+
+    def test_unknown_returned_lowercased_unchanged(self):
+        assert normalize_language("Haskell") == "haskell"
+        assert normalize_language("cobol") == "cobol"
+
+    def test_every_alias_targets_a_canonical_name(self):
+        # Guard against an alias pointing at a name no extension produces.
+        canonical = set(EXTENSION_MAP.values())
+        for alias, target in LANGUAGE_ALIASES.items():
+            assert target in canonical, f"{alias} -> {target} is not canonical"

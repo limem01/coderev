@@ -41,6 +41,8 @@ from typing import Any
 
 import yaml
 
+from .languages import normalize_language
+
 
 DEFAULT_RULES_FILENAME = ".coderev-rules.yaml"
 
@@ -149,14 +151,22 @@ class Rule:
     
     def applies_to_language(self, language: str | None) -> bool:
         """Check if this rule applies to the given language.
-        
+
         If no languages are specified, the rule applies to all languages.
+
+        Both the rule's declared languages and the queried language are folded
+        to their canonical form (:func:`~coderev.languages.normalize_language`)
+        before comparison, so a rule written with a natural alias
+        (``languages: [C++, golang, js]``) still matches a file that
+        :func:`~coderev.languages.detect_language` labels with the canonical
+        name (``cpp``, ``go``, ``javascript``).
         """
         if not self.languages:
             return True
         if not language:
             return True  # Apply to unknown languages if not restricted
-        return language.lower() in [lang.lower() for lang in self.languages]
+        target = normalize_language(language)
+        return target in {normalize_language(lang) for lang in self.languages}
     
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Rule:
