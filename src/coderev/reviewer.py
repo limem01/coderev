@@ -403,10 +403,12 @@ class CodeReviewer:
         """
         focus = focus or self.config.focus
         effective_rules = rules if rules is not None else self.rules
+        # Rules text goes into the prompt, so it must key the cache as well
+        rules_text = effective_rules.to_prompt_text(language) if effective_rules else ""
         
         # Check cache first
         if use_cache:
-            cached = self.cache.get(code, self.model, focus, language)
+            cached = self.cache.get(code, self.model, focus, language, rules_text)
             if cached is not None:
                 # Reconstruct ReviewResult from cached data
                 issues = [Issue.from_dict(i) for i in cached.get("issues", [])]
@@ -423,7 +425,7 @@ class CodeReviewer:
         
         # Cache the result
         if use_cache:
-            self.cache.set(code, self.model, response, focus, language)
+            self.cache.set(code, self.model, response, focus, language, rules_text)
         
         issues = [Issue.from_dict(i) for i in response.get("issues", [])]
         
@@ -512,10 +514,12 @@ class CodeReviewer:
         """
         focus = focus or self.config.focus
         effective_rules = rules if rules is not None else self.rules
+        # Rules text goes into the prompt, so it must key the cache as well
+        rules_text = effective_rules.to_prompt_text() if effective_rules else ""
         
         # Check cache first (use 'diff' as language marker for cache key distinction)
         if use_cache:
-            cached = self.cache.get(diff, self.model, focus, language="diff")
+            cached = self.cache.get(diff, self.model, focus, language="diff", rules_text=rules_text)
             if cached is not None:
                 issues = [Issue.from_dict(i) for i in cached.get("issues", [])]
                 return ReviewResult(
@@ -531,7 +535,7 @@ class CodeReviewer:
         
         # Cache the result
         if use_cache:
-            self.cache.set(diff, self.model, response, focus, language="diff")
+            self.cache.set(diff, self.model, response, focus, language="diff", rules_text=rules_text)
         
         issues = [Issue.from_dict(i) for i in response.get("issues", [])]
         
@@ -578,13 +582,15 @@ class CodeReviewer:
         """
         focus = focus or self.config.focus
         effective_rules = rules if rules is not None else self.rules
+        # Rules text goes into the prompt, so it must key the cache as well
+        rules_text = effective_rules.to_prompt_text(language) if effective_rules else ""
         
         # Use a different cache key marker for inline suggestions
         cache_language = f"inline:{language}" if language else "inline"
         
         # Check cache first
         if use_cache:
-            cached = self.cache.get(code, self.model, focus, cache_language)
+            cached = self.cache.get(code, self.model, focus, cache_language, rules_text)
             if cached is not None:
                 inline_suggestions = [
                     InlineSuggestion.from_dict(s) 
@@ -604,7 +610,7 @@ class CodeReviewer:
         
         # Cache the result
         if use_cache:
-            self.cache.set(code, self.model, response, focus, cache_language)
+            self.cache.set(code, self.model, response, focus, cache_language, rules_text)
         
         inline_suggestions = [
             InlineSuggestion.from_dict(s) 

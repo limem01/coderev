@@ -98,11 +98,13 @@ class ReviewCache:
         model: str,
         focus: list[str] | None = None,
         language: str | None = None,
+        rules_text: str | None = None,
     ) -> str:
         """Generate a unique cache key for the review parameters.
         
         The key is a SHA-256 hash of the combined parameters, ensuring that
-        any change to content, model, focus, or language produces a different key.
+        any change to content, model, focus, language, or the custom-rules
+        text injected into the prompt produces a different key.
         
         Unicode content is normalized to NFC form before hashing to ensure
         consistent cache keys regardless of unicode representation.
@@ -117,6 +119,14 @@ class ReviewCache:
         
         # Combine all parameters
         key_content = f"{normalized_content}|{model}|{focus_str}|{language or ''}"
+        
+        # Custom rules change the prompt, so they must change the key too --
+        # otherwise editing a rule keeps serving reviews made under the old
+        # rules. Only appended when present, so rule-less keys are unchanged
+        # and existing cache entries stay valid.
+        if rules_text:
+            rules_digest = hashlib.sha256(rules_text.encode("utf-8")).hexdigest()
+            key_content += f"|rules:{rules_digest}"
         
         # Generate SHA-256 hash
         return hashlib.sha256(key_content.encode("utf-8")).hexdigest()
@@ -181,6 +191,7 @@ class ReviewCache:
         model: str,
         focus: list[str] | None = None,
         language: str | None = None,
+        rules_text: str | None = None,
     ) -> dict[str, Any] | None:
         """Retrieve a cached review result if available and not expired.
         
@@ -189,6 +200,7 @@ class ReviewCache:
             model: The AI model being used.
             focus: List of focus areas for the review.
             language: The programming language (optional).
+            rules_text: Custom-rules text injected into the prompt (optional).
             
         Returns:
             The cached result dictionary if found and valid, None otherwise.
@@ -196,7 +208,7 @@ class ReviewCache:
         if not self.enabled:
             return None
         
-        cache_key = self._generate_cache_key(content, model, focus, language)
+        cache_key = self._generate_cache_key(content, model, focus, language, rules_text)
         cache_path = self._get_cache_path(cache_key)
         
         if not cache_path.exists():
@@ -299,6 +311,7 @@ class ReviewCache:
         result: dict[str, Any],
         focus: list[str] | None = None,
         language: str | None = None,
+        rules_text: str | None = None,
     ) -> None:
         """Store a review result in the cache.
         
@@ -308,11 +321,12 @@ class ReviewCache:
             result: The review result dictionary to cache.
             focus: List of focus areas used for the review.
             language: The programming language (optional).
+            rules_text: Custom-rules text injected into the prompt (optional).
         """
         if not self.enabled:
             return
         
-        cache_key = self._generate_cache_key(content, model, focus, language)
+        cache_key = self._generate_cache_key(content, model, focus, language, rules_text)
         cache_path = self._get_cache_path(cache_key)
         
         # Ensure subdirectory exists
