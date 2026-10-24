@@ -20,6 +20,7 @@ from coderev.reviewer import (
     ReviewResult,
     is_binary_file,
 )
+from coderev.rules import RuleSet, load_rules
 
 
 class AsyncCodeReviewer:
@@ -52,6 +53,9 @@ class AsyncCodeReviewer:
         config: Config | None = None,
         max_concurrent: int = 5,
         provider: str | None = None,
+        rules: RuleSet | None = None,
+        rules_path: Path | str | None = None,
+        auto_load_rules: bool = True,
     ):
         """Initialize async reviewer.
         
@@ -61,6 +65,9 @@ class AsyncCodeReviewer:
             config: Configuration object.
             max_concurrent: Maximum concurrent API calls (default 5).
             provider: LLM provider ('anthropic' or 'openai'). Auto-detected if not specified.
+            rules: Pre-loaded RuleSet to use (takes precedence over rules_path).
+            rules_path: Path to custom rules YAML file.
+            auto_load_rules: If True and no rules provided, auto-discover rules file.
         """
         self.config = config or Config.load()
         self.model = model or self.config.model
@@ -96,6 +103,17 @@ class AsyncCodeReviewer:
             api_key=self.api_key,
             model=self.model,
         )
+        
+        # Initialize rules (same contract as CodeReviewer, so parallel and
+        # sequential reviews of the same files apply the same custom rules)
+        if rules is not None:
+            self.rules = rules
+        elif rules_path:
+            self.rules = load_rules(rules_path)
+        elif auto_load_rules:
+            self.rules = load_rules()  # Auto-discover
+        else:
+            self.rules = RuleSet()
         
         self._semaphore: asyncio.Semaphore | None = None
     
@@ -135,10 +153,16 @@ class AsyncCodeReviewer:
         language: str | None = None,
         focus: list[str] | None = None,
         context: str | None = None,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
-        """Review a code snippet asynchronously."""
+        """Review a code snippet asynchronously.
+        
+        Args:
+            rules: Optional rules to use (defaults to instance rules).
+        """
         focus = focus or self.config.focus
-        prompt = build_review_prompt(code, language, focus, context)
+        effective_rules = rules if rules is not None else self.rules
+        prompt = build_review_prompt(code, language, focus, context, rules=effective_rules)
         
         response = await self._call_api(prompt)
         
@@ -156,12 +180,14 @@ class AsyncCodeReviewer:
         self,
         file_path: Path | str,
         focus: list[str] | None = None,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
         """Review a single file asynchronously.
         
         Args:
             file_path: Path to the file to review.
             focus: Optional list of focus areas for the review.
+            rules: Optional rules to use (defaults to instance rules).
             
         Returns:
             ReviewResult containing the review findings.
@@ -192,7 +218,9 @@ class AsyncCodeReviewer:
         
         language = self._detect_language(file_path) if self.config.language_hints else None
         
-        result = await self.review_code_async(code, language, focus, context=str(file_path))
+        result = await self.review_code_async(
+            code, language, focus, context=str(file_path), rules=rules
+        )
         
         for issue in result.issues:
             issue.file = str(file_path)
@@ -254,10 +282,16 @@ class AsyncCodeReviewer:
         self,
         diff: str,
         focus: list[str] | None = None,
+        rules: RuleSet | None = None,
     ) -> ReviewResult:
-        """Review a git diff asynchronously."""
+        """Review a git diff asynchronously.
+        
+        Args:
+            rules: Optional rules to use (defaults to instance rules).
+        """
         focus = focus or self.config.focus
-        prompt = build_diff_prompt(diff, focus)
+        effective_rules = rules if rules is not None else self.rules
+        prompt = build_diff_prompt(diff, focus, rules=effective_rules)
         
         response = await self._call_api(prompt)
         
@@ -280,6 +314,7 @@ async def review_files_parallel(
     max_concurrent: int = 5,
     config: Config | None = None,
     provider: str | None = None,
+    rules: RuleSet | None = None,
 ) -> dict[str, ReviewResult]:
     """Convenience function to review files in parallel.
     
@@ -307,5 +342,6 @@ async def review_files_parallel(
         config=config,
         max_concurrent=max_concurrent,
         provider=provider,
+        rules=rules,
     ) as reviewer:
         return await reviewer.review_files_async(file_paths, focus)
