@@ -20,6 +20,7 @@ from coderev.reviewer import (
     ReviewResult,
     is_binary_file,
 )
+from coderev.cache import ReviewCache
 from coderev.rules import RuleSet, load_rules
 
 
@@ -56,6 +57,9 @@ class AsyncCodeReviewer:
         rules: RuleSet | None = None,
         rules_path: Path | str | None = None,
         auto_load_rules: bool = True,
+        cache_enabled: bool = True,
+        cache_ttl_hours: int | None = None,
+        cache_dir: Path | str | None = None,
     ):
         """Initialize async reviewer.
         
@@ -68,6 +72,9 @@ class AsyncCodeReviewer:
             rules: Pre-loaded RuleSet to use (takes precedence over rules_path).
             rules_path: Path to custom rules YAML file.
             auto_load_rules: If True and no rules provided, auto-discover rules file.
+            cache_enabled: Whether to enable result caching.
+            cache_ttl_hours: Cache TTL in hours. Defaults to 168 (1 week).
+            cache_dir: Directory for cache storage.
         """
         self.config = config or Config.load()
         self.model = model or self.config.model
@@ -102,6 +109,14 @@ class AsyncCodeReviewer:
             provider_name=self.provider_name,
             api_key=self.api_key,
             model=self.model,
+        )
+        
+        # Initialize cache (same store and key as CodeReviewer, so a parallel
+        # review reuses results from a sequential one and vice versa)
+        self.cache = ReviewCache(
+            cache_dir=cache_dir,
+            ttl_hours=cache_ttl_hours or 168,  # 1 week default
+            enabled=cache_enabled,
         )
         
         # Initialize rules (same contract as CodeReviewer, so parallel and
@@ -154,17 +169,36 @@ class AsyncCodeReviewer:
         focus: list[str] | None = None,
         context: str | None = None,
         rules: RuleSet | None = None,
+        use_cache: bool = True,
     ) -> ReviewResult:
         """Review a code snippet asynchronously.
         
         Args:
             rules: Optional rules to use (defaults to instance rules).
+            use_cache: Whether to use cached results if available.
         """
         focus = focus or self.config.focus
         effective_rules = rules if rules is not None else self.rules
-        prompt = build_review_prompt(code, language, focus, context, rules=effective_rules)
+        # Rules text goes into the prompt, so it must key the cache as well
+        rules_text = effective_rules.to_prompt_text(language) if effective_rules else ""
         
+        if use_cache:
+            cached = self.cache.get(code, self.model, focus, language, rules_text)
+            if cached is not None:
+                issues = [Issue.from_dict(i) for i in cached.get("issues", [])]
+                return ReviewResult(
+                    summary=cached.get("summary", "Review completed (cached)"),
+                    issues=issues,
+                    score=cached.get("score", 0),
+                    positive=cached.get("positive", []),
+                    raw_response=cached,
+                )
+        
+        prompt = build_review_prompt(code, language, focus, context, rules=effective_rules)
         response = await self._call_api(prompt)
+        
+        if use_cache:
+            self.cache.set(code, self.model, response, focus, language, rules_text)
         
         issues = [Issue.from_dict(i) for i in response.get("issues", [])]
         
@@ -181,6 +215,7 @@ class AsyncCodeReviewer:
         file_path: Path | str,
         focus: list[str] | None = None,
         rules: RuleSet | None = None,
+        use_cache: bool = True,
     ) -> ReviewResult:
         """Review a single file asynchronously.
         
@@ -188,6 +223,7 @@ class AsyncCodeReviewer:
             file_path: Path to the file to review.
             focus: Optional list of focus areas for the review.
             rules: Optional rules to use (defaults to instance rules).
+            use_cache: Whether to use cached results if available.
             
         Returns:
             ReviewResult containing the review findings.
@@ -219,7 +255,7 @@ class AsyncCodeReviewer:
         language = self._detect_language(file_path) if self.config.language_hints else None
         
         result = await self.review_code_async(
-            code, language, focus, context=str(file_path), rules=rules
+            code, language, focus, context=str(file_path), rules=rules, use_cache=use_cache
         )
         
         for issue in result.issues:
@@ -283,17 +319,37 @@ class AsyncCodeReviewer:
         diff: str,
         focus: list[str] | None = None,
         rules: RuleSet | None = None,
+        use_cache: bool = True,
     ) -> ReviewResult:
         """Review a git diff asynchronously.
         
         Args:
             rules: Optional rules to use (defaults to instance rules).
+            use_cache: Whether to use cached results if available.
         """
         focus = focus or self.config.focus
         effective_rules = rules if rules is not None else self.rules
-        prompt = build_diff_prompt(diff, focus, rules=effective_rules)
+        # Rules text goes into the prompt, so it must key the cache as well
+        rules_text = effective_rules.to_prompt_text() if effective_rules else ""
         
+        # 'diff' as language marker keeps diff and code entries distinct
+        if use_cache:
+            cached = self.cache.get(diff, self.model, focus, language="diff", rules_text=rules_text)
+            if cached is not None:
+                issues = [Issue.from_dict(i) for i in cached.get("issues", [])]
+                return ReviewResult(
+                    summary=cached.get("summary", "Diff review completed (cached)"),
+                    issues=issues,
+                    score=cached.get("score", 0),
+                    positive=cached.get("positive", []),
+                    raw_response=cached,
+                )
+        
+        prompt = build_diff_prompt(diff, focus, rules=effective_rules)
         response = await self._call_api(prompt)
+        
+        if use_cache:
+            self.cache.set(diff, self.model, response, focus, language="diff", rules_text=rules_text)
         
         issues = [Issue.from_dict(i) for i in response.get("issues", [])]
         

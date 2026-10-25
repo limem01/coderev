@@ -33,6 +33,17 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_integration)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_review_cache(tmp_path, monkeypatch):
+    """Point the default review cache at a per-test temp dir.
+
+    Reviewers cache by default, so without this, tests with mocked providers
+    would write fake reviews into the user's real ~/.cache/coderev and could
+    hit each other's entries (skipping the mocked API call).
+    """
+    monkeypatch.setattr("coderev.cache.DEFAULT_CACHE_DIR", tmp_path / "review-cache")
+
+
 @pytest.fixture
 def anthropic_api_key():
     """Get Anthropic API key from environment.
