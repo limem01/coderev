@@ -284,6 +284,7 @@ class AsyncCodeReviewer:
                 summary=f"Error reviewing file: {e}",
                 issues=[],
                 score=0,
+                error=str(e),
             ))
     
     async def review_files_async(

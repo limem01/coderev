@@ -234,6 +234,12 @@ class ReviewResult:
     verdict: str | None = None  # For PR reviews
     raw_response: dict[str, Any] = field(default_factory=dict)
     inline_suggestions: list[InlineSuggestion] = field(default_factory=list)
+    error: str | None = None  # Set when the review failed (file was not reviewed)
+    
+    @property
+    def failed(self) -> bool:
+        """True if the review errored out rather than completing."""
+        return self.error is not None
     
     @property
     def critical_count(self) -> int:
@@ -716,6 +722,7 @@ class CodeReviewer:
                     summary=f"Error reviewing file: {e}",
                     issues=[],
                     score=0,
+                    error=str(e),
                 )
         return results
     

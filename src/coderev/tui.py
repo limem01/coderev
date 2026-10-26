@@ -684,6 +684,7 @@ class TUIApp:
                             summary=f"Error: {e}",
                             issues=[],
                             score=-1,
+                            error=str(e),
                         )
                     
                     progress.advance(task)

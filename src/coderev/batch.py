@@ -29,6 +29,20 @@ class FileReviewSummary:
     @classmethod
     def from_result(cls, file_path: str, result: ReviewResult) -> "FileReviewSummary":
         """Create a FileReviewSummary from a ReviewResult."""
+        if result.error is not None:
+            # Review failed (API/IO error): not a real score, keep it out of stats
+            return cls(
+                file_path=file_path,
+                score=0,
+                total_issues=0,
+                critical_count=0,
+                high_count=0,
+                medium_count=0,
+                low_count=0,
+                status="error",
+                error_message=result.summary,
+            )
+        
         if result.score < 0:
             # Skipped file
             return cls(
