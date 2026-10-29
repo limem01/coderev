@@ -12,11 +12,46 @@ from rich.console import Console
 
 from coderev import __version__
 from coderev.config import Config
-from coderev.reviewer import CodeReviewer, RateLimitError
+from coderev.reviewer import BinaryFileError, CodeReviewer, RateLimitError, ReviewResult
 from coderev.output import RichFormatter, get_formatter, JsonFormatter
 
 
 console = Console()
+# Gate verdicts go to stderr so JSON/SARIF/markdown on stdout stays parseable.
+err_console = Console(stderr=True)
+
+SEVERITY_ORDER = ["low", "medium", "high", "critical"]
+
+
+def enforce_fail_on(results: dict[str, ReviewResult], fail_on: Optional[str]) -> None:
+    """Exit with status 1 if a ``--fail-on`` gate is not satisfied.
+
+    The gate fails closed: a file whose review errored (bad API key, provider
+    outage, rate limit) was never checked, so the gate cannot vouch for it.
+    Skipped files (binary, score -1) are not errors and do not trip it.
+    """
+    if not fail_on:
+        return
+
+    threshold = SEVERITY_ORDER.index(fail_on)
+    blocking = any(
+        SEVERITY_ORDER.index(issue.severity.value) >= threshold
+        for result in results.values()
+        for issue in result.issues
+    )
+    errored = [path for path, result in results.items() if result.failed]
+
+    if blocking:
+        err_console.print(f"[red bold]FAIL: Issues found at or above '{fail_on}' severity[/]")
+    if errored:
+        err_console.print(
+            f"[red bold]FAIL: {len(errored)} file(s) could not be reviewed, "
+            f"so --fail-on {fail_on} cannot pass:[/]"
+        )
+        for path in errored:
+            err_console.print(f"  [red]{path}: {results[path].error}[/]", highlight=False)
+    if blocking or errored:
+        sys.exit(1)
 
 
 def get_git_diff(ref: str | None = None, staged: bool = False) -> str:
@@ -234,18 +269,6 @@ def review(
                         formatter.format(result) for result in results.values()
                     )
                 click.echo(output)
-            
-            # Check fail condition
-            if fail_on:
-                from coderev.reviewer import Severity
-                severity_order = ["low", "medium", "high", "critical"]
-                min_severity_idx = severity_order.index(fail_on)
-                
-                for result in results.values():
-                    for issue in result.issues:
-                        issue_idx = severity_order.index(issue.severity.value)
-                        if issue_idx >= min_severity_idx:
-                            sys.exit(1)
         else:
             # Sequential processing for single file or when parallel is disabled
             reviewer = CodeReviewer(config=config)
@@ -260,8 +283,16 @@ def review(
                         result = reviewer.review_file(file_path, focus=focus_list)
                         results[str(file_path)] = result
                         formatter.print_result(result, str(file_path))
+                    except BinaryFileError as e:
+                        console.print(f"[yellow]Skipped {file_path}: {e.message}[/]")
                     except Exception as e:
                         console.print(f"[red]Error reviewing {file_path}: {e}[/]")
+                        # Record the failure so --fail-on can't pass a file nobody reviewed.
+                        results[str(file_path)] = ReviewResult(
+                            summary=f"Error reviewing file: {e}",
+                            score=0,
+                            error=str(e),
+                        )
             else:
                 formatter = get_formatter(output_format)
                 results = reviewer.review_files([str(f) for f in files], focus=focus_list)
@@ -274,18 +305,10 @@ def review(
                     )
                 
                 click.echo(output)
-            
-            # Check fail condition (without re-reviewing files)
-            if fail_on:
-                severity_order = ["low", "medium", "high", "critical"]
-                min_severity_idx = severity_order.index(fail_on)
-                
-                for result in results.values():
-                    for issue in result.issues:
-                        issue_idx = severity_order.index(issue.severity.value)
-                        if issue_idx >= min_severity_idx:
-                            sys.exit(1)
-    
+
+        # Check fail condition (without re-reviewing files)
+        enforce_fail_on(results, fail_on)
+
     except RateLimitError as e:
         console.print(f"[red bold]Rate Limit Exceeded[/]")
         console.print(f"[yellow]{e.message}[/]")
@@ -1093,24 +1116,8 @@ def batch(
                 click.echo(output)
         
         # Check fail condition
-        if fail_on:
-            severity_order = ["low", "medium", "high", "critical"]
-            min_severity_idx = severity_order.index(fail_on)
-            
-            should_fail = False
-            if min_severity_idx <= 3 and report.critical_issues > 0:
-                should_fail = True
-            if min_severity_idx <= 2 and report.high_issues > 0:
-                should_fail = True
-            if min_severity_idx <= 1 and report.medium_issues > 0:
-                should_fail = True
-            if min_severity_idx <= 0 and report.low_issues > 0:
-                should_fail = True
-            
-            if should_fail:
-                console.print(f"\n[red bold]FAIL: Issues found at or above '{fail_on}' severity[/]")
-                sys.exit(1)
-    
+        enforce_fail_on(results, fail_on)
+
     except RateLimitError as e:
         console.print(f"[red bold]Rate Limit Exceeded[/]")
         console.print(f"[yellow]{e.message}[/]")
