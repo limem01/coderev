@@ -23,6 +23,16 @@ err_console = Console(stderr=True)
 SEVERITY_ORDER = ["low", "medium", "high", "critical"]
 
 
+def status_console(output_format: str) -> Console:
+    """Console for progress and status lines, chosen by output format.
+
+    Rich output is for a human at a terminal, so status lines share stdout with
+    it. Machine-readable formats (json, sarif, markdown, html) own stdout, so
+    status lines go to stderr and ``coderev batch . --format json | jq`` parses.
+    """
+    return console if output_format == "rich" else err_console
+
+
 def enforce_fail_on(results: dict[str, ReviewResult], fail_on: Optional[str]) -> None:
     """Exit with status 1 if a ``--fail-on`` gate is not satisfied.
 
@@ -78,8 +88,11 @@ def collect_files(
     recursive: bool = False,
     exclude: tuple[str, ...] = (),
     use_ignore: bool = True,
+    status: Optional[Console] = None,
 ) -> list[Path]:
     """Collect files from paths, handling directories.
+
+    Warnings about missing paths go to ``status`` (default: stdout console).
 
     When ``use_ignore`` is True (the default), files matched by the repo's
     ``.coderevignore`` are dropped as well. Without this, ``review``/``estimate``
@@ -132,7 +145,7 @@ def collect_files(
                     if not excluded and not _is_ignored(file_path):
                         files.append(file_path)
         else:
-            console.print(f"[yellow]Warning: {path} does not exist[/]")
+            (status or console).print(f"[yellow]Warning: {path} does not exist[/]")
 
     return files
 
@@ -217,18 +230,20 @@ def review(
     from coderev.async_reviewer import AsyncCodeReviewer
     from coderev.cost import CostEstimator, CostEstimate
 
+    status = status_console(output_format)
+
     try:
         config = Config.load()
         errors = config.validate()
         if errors:
             for error in errors:
-                console.print(f"[red]Config error: {error}[/]")
+                status.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
 
-        files = collect_files(paths, recursive, exclude, use_ignore=not no_ignore)
+        files = collect_files(paths, recursive, exclude, use_ignore=not no_ignore, status=status)
         
         if not files:
-            console.print("[yellow]No files to review[/]")
+            status.print("[yellow]No files to review[/]")
             return
         
         focus_list = list(focus) if focus else None
@@ -244,7 +259,7 @@ def review(
         use_parallel = parallel and len(files) > 1
         
         if use_parallel:
-            console.print(f"[dim]Reviewing {len(files)} files in parallel (max {max_concurrent} concurrent)...[/]")
+            status.print(f"[dim]Reviewing {len(files)} files in parallel (max {max_concurrent} concurrent)...[/]")
             
             async def run_parallel_review():
                 async with AsyncCodeReviewer(
@@ -310,11 +325,11 @@ def review(
         enforce_fail_on(results, fail_on)
 
     except RateLimitError as e:
-        console.print(f"[red bold]Rate Limit Exceeded[/]")
-        console.print(f"[yellow]{e.message}[/]")
+        status.print(f"[red bold]Rate Limit Exceeded[/]")
+        status.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
+        status.print(f"[red]Error: {e}[/]")
         sys.exit(1)
 
 
@@ -1049,30 +1064,32 @@ def batch(
         format_batch_report_markdown,
         format_batch_report_html,
     )
-    
+
+    status = status_console(output_format)
+
     try:
         config = Config.load()
         errors = config.validate()
         if errors:
             for error in errors:
-                console.print(f"[red]Config error: {error}[/]")
+                status.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
         
-        files = collect_files(paths, recursive, exclude)
+        files = collect_files(paths, recursive, exclude, status=status)
         
         if not files:
-            console.print("[yellow]No files to review[/]")
+            status.print("[yellow]No files to review[/]")
             return
         
         focus_list = list(focus) if focus else None
         
-        console.print(f"[bold blue]Batch Review[/] - {len(files)} files")
+        status.print(f"[bold blue]Batch Review[/] - {len(files)} files")
         
         # Use parallel processing for multiple files
         use_parallel = parallel and len(files) > 1
         
         if use_parallel:
-            console.print(f"[dim]Reviewing in parallel (max {max_concurrent} concurrent)...[/]")
+            status.print(f"[dim]Reviewing in parallel (max {max_concurrent} concurrent)...[/]")
             
             async def run_parallel_review():
                 async with AsyncCodeReviewer(
@@ -1083,7 +1100,7 @@ def batch(
             
             results = asyncio.run(run_parallel_review())
         else:
-            console.print("[dim]Reviewing files sequentially...[/]")
+            status.print("[dim]Reviewing files sequentially...[/]")
             reviewer = CodeReviewer(config=config)
             results = reviewer.review_files([str(f) for f in files], focus=focus_list)
         
@@ -1097,21 +1114,21 @@ def batch(
             output = json_module.dumps(report.to_dict(), indent=2)
             if output_file:
                 Path(output_file).write_text(output)
-                console.print(f"[green]Report saved to {output_file}[/]")
+                status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
         elif output_format == "markdown":
             output = format_batch_report_markdown(report)
             if output_file:
                 Path(output_file).write_text(output)
-                console.print(f"[green]Report saved to {output_file}[/]")
+                status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
         elif output_format == "html":
             output = format_batch_report_html(report)
             if output_file:
                 Path(output_file).write_text(output)
-                console.print(f"[green]Report saved to {output_file}[/]")
+                status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
         
@@ -1119,11 +1136,11 @@ def batch(
         enforce_fail_on(results, fail_on)
 
     except RateLimitError as e:
-        console.print(f"[red bold]Rate Limit Exceeded[/]")
-        console.print(f"[yellow]{e.message}[/]")
+        status.print(f"[red bold]Rate Limit Exceeded[/]")
+        status.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
+        status.print(f"[red]Error: {e}[/]")
         sys.exit(1)
 
 

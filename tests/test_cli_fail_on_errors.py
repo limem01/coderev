@@ -198,9 +198,8 @@ def test_batch_json_stdout_stays_parseable_when_gate_trips_on_issues(runner, tmp
 
     assert result.exit_code == 1
     # The FAIL line used to be printed to stdout right after the JSON report.
-    # (Batch progress lines still precede it on stdout; that is separate.)
     assert "FAIL" not in result.stdout
-    report = json.loads(result.stdout[result.stdout.index("{"):])
+    report = json.loads(result.stdout)
     assert report["summary"]["critical_issues"] == 1
     assert "at or above 'high'" in result.stderr
 
