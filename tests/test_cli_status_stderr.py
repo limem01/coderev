@@ -55,9 +55,9 @@ def async_reviewer():
 @pytest.fixture
 def sync_reviewer():
     with patch("coderev.cli.CodeReviewer") as reviewer_cls:
-        reviewer_cls.return_value.review_files.side_effect = (
-            lambda files, focus=None: {f: _clean() for f in files}
-        )
+        reviewer_cls.return_value.review_files.side_effect = lambda files, focus=None: {
+            f: _clean() for f in files
+        }
         yield reviewer_cls
 
 
@@ -91,9 +91,7 @@ def test_batch_parallel_json_stdout_is_pure_json(runner, tmp_path, async_reviewe
 def test_batch_sequential_json_stdout_is_pure_json(runner, tmp_path, sync_reviewer):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write("a.py", "b.py")
-        result = runner.invoke(
-            main, ["batch", "a.py", "b.py", "--no-parallel", "--format", "json"]
-        )
+        result = runner.invoke(main, ["batch", "a.py", "b.py", "--no-parallel", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     json.loads(result.stdout)
@@ -128,9 +126,7 @@ def test_batch_output_file_keeps_stdout_empty(runner, tmp_path, async_reviewer):
 def test_batch_missing_path_warning_goes_to_stderr(runner, tmp_path, async_reviewer):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write("a.py", "b.py")
-        result = runner.invoke(
-            main, ["batch", "a.py", "b.py", "missing.py", "--format", "json"]
-        )
+        result = runner.invoke(main, ["batch", "a.py", "b.py", "missing.py", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     json.loads(result.stdout)
@@ -186,9 +182,7 @@ def test_review_parallel_json_stdout_is_pure_json(runner, tmp_path, async_review
 def test_review_missing_path_warning_goes_to_stderr(runner, tmp_path, async_reviewer):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         _write("a.py", "b.py")
-        result = runner.invoke(
-            main, ["review", "a.py", "b.py", "missing.py", "--format", "json"]
-        )
+        result = runner.invoke(main, ["review", "a.py", "b.py", "missing.py", "--format", "json"])
 
     assert result.exit_code == 0, result.output
     json.loads(result.stdout)
