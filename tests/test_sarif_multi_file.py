@@ -213,3 +213,28 @@ def test_review_sequential_sarif_is_one_log(runner, tmp_path):
     data = json.loads(result.stdout)
     assert len(data["runs"]) == 1
     assert sorted(_uris(data["runs"][0])) == ["a.py", "b.py"]
+
+
+# --- suggestions -------------------------------------------------------------
+
+
+def test_suggestion_is_not_emitted_as_a_fix_without_artifact_changes():
+    """A SARIF fix requires `artifactChanges`; schema validation rejects a description-only fix."""
+    issue = _issue("SQL injection", "db.py")
+    issue.suggestion = "Use parameterized queries"
+    results = {"db.py": ReviewResult(summary="s", issues=[issue])}
+
+    [result] = json.loads(SarifFormatter().format_multiple(results))["runs"][0]["results"]
+
+    assert "fixes" not in result
+    assert result["message"]["text"] == "SQL injection\n\nSuggestion: Use parameterized queries"
+    assert result["properties"] == {"suggestion": "Use parameterized queries"}
+
+
+def test_issue_without_suggestion_has_plain_message():
+    results = {"a.py": ReviewResult(summary="a", issues=[_issue("plain", "a.py")])}
+
+    [result] = json.loads(SarifFormatter().format_multiple(results))["runs"][0]["results"]
+
+    assert result["message"]["text"] == "plain"
+    assert "properties" not in result

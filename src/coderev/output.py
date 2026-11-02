@@ -319,21 +319,24 @@ class SarifFormatter(OutputFormatter):
         results = []
 
         for issue, path in located:
+            message = issue.message
+            if issue.suggestion:
+                message = f"{message}\n\nSuggestion: {issue.suggestion}"
+
             result: dict[str, Any] = {
                 "ruleId": f"coderev/{issue.category.value}",
                 "level": self._severity_to_level(issue.severity),
-                "message": {"text": issue.message},
+                "message": {"text": message},
             }
 
             if path:
                 result["locations"] = [self._physical_location(path, issue.line, issue.end_line)]
 
+            # A SARIF `fix` must carry `artifactChanges` (byte-level edits), which a
+            # prose suggestion cannot supply. Keep it in the message, which code
+            # scanning displays, and in the property bag for machine readers.
             if issue.suggestion:
-                result["fixes"] = [
-                    {
-                        "description": {"text": issue.suggestion},
-                    }
-                ]
+                result["properties"] = {"suggestion": issue.suggestion}
 
             results.append(result)
 
