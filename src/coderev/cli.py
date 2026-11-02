@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import click
 from rich.console import Console
@@ -14,6 +14,9 @@ from coderev import __version__
 from coderev.config import Config
 from coderev.reviewer import BinaryFileError, CodeReviewer, RateLimitError, ReviewResult
 from coderev.output import RichFormatter, get_formatter
+
+if TYPE_CHECKING:
+    from coderev.cost import CostEstimate
 
 
 console = Console()
@@ -198,6 +201,73 @@ def print_cost_estimate(estimate: "CostEstimate", console: Console) -> None:
         )
 
 
+# Formats `review --estimate` / `diff --estimate` can emit. A cost estimate is
+# not a review, so there is no markdown or SARIF rendering of one.
+ESTIMATE_FORMATS = ("rich", "json")
+
+
+def cost_estimate_to_dict(
+    estimate: CostEstimate, max_cost: float | None = None
+) -> dict[str, object]:
+    """JSON-ready view of a cost estimate.
+
+    One schema for ``coderev estimate --format json`` and for ``--estimate
+    --format json`` on ``review``/``diff``, so scripts can read either.
+    Budget fields appear only when ``max_cost`` is given, and ``per_file``
+    only for a detailed (``--per-file``) estimate.
+    """
+    data: dict[str, object] = {
+        "model": estimate.model,
+        "file_count": estimate.file_count,
+        "skipped_files": estimate.skipped_files,
+        "input_tokens": estimate.input_tokens,
+        "estimated_output_tokens": estimate.estimated_output_tokens,
+        "total_tokens": estimate.total_tokens,
+        "input_cost_usd": round(estimate.input_cost_usd, 6),
+        "output_cost_usd": round(estimate.output_cost_usd, 6),
+        "total_cost_usd": round(estimate.total_cost_usd, 6),
+        "pricing_is_estimated": estimate.pricing_is_estimated,
+        "batch_mode": estimate.batch_mode,
+    }
+    if max_cost is not None:
+        data["max_cost_usd"] = max_cost
+        data["over_budget"] = estimate.exceeds_budget(max_cost)
+    if estimate.file_breakdown is not None:
+        data["per_file"] = [
+            {
+                "path": item.path,
+                "input_tokens": item.input_tokens,
+                "estimated_output_tokens": item.estimated_output_tokens,
+                "total_cost_usd": round(item.total_cost_usd, 6),
+            }
+            for item in estimate.file_breakdown
+        ]
+    return data
+
+
+def emit_cost_estimate(estimate: CostEstimate, output_format: str) -> None:
+    """Write a cost estimate to stdout as JSON or as the rich panel."""
+    if output_format == "json":
+        import json as json_module
+
+        click.echo(json_module.dumps(cost_estimate_to_dict(estimate), indent=2))
+    else:
+        print_cost_estimate(estimate, console)
+
+
+def check_estimate_format(estimate: bool, output_format: str) -> None:
+    """Reject ``--estimate`` with a format that cannot represent an estimate.
+
+    Without this, ``--estimate --format sarif`` wrote the rich panel to stdout,
+    which a SARIF consumer would then fail to parse.
+    """
+    if estimate and output_format not in ESTIMATE_FORMATS:
+        raise click.UsageError(
+            f"--estimate supports --format {' or '.join(ESTIMATE_FORMATS)}, "
+            f"not {output_format}"
+        )
+
+
 @main.command()
 @click.argument("paths", nargs=-1, required=True)
 @click.option("--focus", "-f", multiple=True, help="Focus areas (bugs, security, performance, style, architecture)")
@@ -230,6 +300,7 @@ def review(
     from coderev.async_reviewer import AsyncCodeReviewer
     from coderev.cost import CostEstimator, CostEstimate
 
+    check_estimate_format(estimate, output_format)
     status = status_console(output_format)
 
     try:
@@ -252,7 +323,7 @@ def review(
         if estimate:
             estimator = CostEstimator(model=config.model)
             cost_estimate = estimator.estimate_files(files, focus=focus_list)
-            print_cost_estimate(cost_estimate, console)
+            emit_cost_estimate(cost_estimate, output_format)
             return
         
         # Use parallel processing for multiple files (unless disabled)
@@ -339,7 +410,9 @@ def diff(
     Use --estimate to see the expected cost before running.
     """
     from coderev.cost import CostEstimator
-    
+
+    check_estimate_format(estimate, output_format)
+
     try:
         config = Config.load()
         errors = config.validate()
@@ -347,7 +420,7 @@ def diff(
             for error in errors:
                 console.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
-        
+
         diff_content = get_git_diff(ref, staged)
         
         if not diff_content.strip():
@@ -360,7 +433,7 @@ def diff(
         if estimate:
             estimator = CostEstimator(model=config.model)
             cost_estimate = estimator.estimate_diff(diff_content, focus=focus_list)
-            print_cost_estimate(cost_estimate, console)
+            emit_cost_estimate(cost_estimate, output_format)
             return
         
         reviewer = CodeReviewer(config=config)
@@ -912,32 +985,7 @@ def estimate(
         )
 
         if output_format == "json":
-            result = {
-                "model": cost_estimate.model,
-                "file_count": cost_estimate.file_count,
-                "skipped_files": cost_estimate.skipped_files,
-                "input_tokens": cost_estimate.input_tokens,
-                "estimated_output_tokens": cost_estimate.estimated_output_tokens,
-                "total_tokens": cost_estimate.total_tokens,
-                "input_cost_usd": round(cost_estimate.input_cost_usd, 6),
-                "output_cost_usd": round(cost_estimate.output_cost_usd, 6),
-                "total_cost_usd": round(cost_estimate.total_cost_usd, 6),
-                "pricing_is_estimated": cost_estimate.pricing_is_estimated,
-                "batch_mode": cost_estimate.batch_mode,
-            }
-            if max_cost is not None:
-                result["max_cost_usd"] = max_cost
-                result["over_budget"] = over_budget
-            if cost_estimate.file_breakdown is not None:
-                result["per_file"] = [
-                    {
-                        "path": item.path,
-                        "input_tokens": item.input_tokens,
-                        "estimated_output_tokens": item.estimated_output_tokens,
-                        "total_cost_usd": round(item.total_cost_usd, 6),
-                    }
-                    for item in cost_estimate.file_breakdown
-                ]
+            result = cost_estimate_to_dict(cost_estimate, max_cost)
             click.echo(json_module.dumps(result, indent=2))
         else:
             print_cost_estimate(cost_estimate, console)
