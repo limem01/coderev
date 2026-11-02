@@ -13,7 +13,7 @@ from rich.console import Console
 from coderev import __version__
 from coderev.config import Config
 from coderev.reviewer import BinaryFileError, CodeReviewer, RateLimitError, ReviewResult
-from coderev.output import RichFormatter, get_formatter, JsonFormatter
+from coderev.output import RichFormatter, get_formatter
 
 
 console = Console()
@@ -277,13 +277,7 @@ def review(
                     formatter.print_result(result, file_path)
             else:
                 formatter = get_formatter(output_format)
-                if isinstance(formatter, JsonFormatter):
-                    output = formatter.format_multiple(results)
-                else:
-                    output = "\n\n".join(
-                        formatter.format(result) for result in results.values()
-                    )
-                click.echo(output)
+                click.echo(formatter.format_multiple(results))
         else:
             # Sequential processing for single file or when parallel is disabled
             reviewer = CodeReviewer(config=config)
@@ -311,15 +305,7 @@ def review(
             else:
                 formatter = get_formatter(output_format)
                 results = reviewer.review_files([str(f) for f in files], focus=focus_list)
-                
-                if isinstance(formatter, JsonFormatter):
-                    output = formatter.format_multiple(results)
-                else:
-                    output = "\n\n".join(
-                        formatter.format(result) for result in results.values()
-                    )
-                
-                click.echo(output)
+                click.echo(formatter.format_multiple(results))
 
         # Check fail condition (without re-reviewing files)
         enforce_fail_on(results, fail_on)

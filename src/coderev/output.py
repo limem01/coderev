@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import PureWindowsPath
 from typing import Any
 
 from rich.console import Console
@@ -35,6 +36,10 @@ class OutputFormatter:
     
     def format(self, result: ReviewResult) -> str:
         raise NotImplementedError
+
+    def format_multiple(self, results: dict[str, ReviewResult]) -> str:
+        """Format several files' results as one output (default: blank-line join)."""
+        return "\n\n".join(self.format(result) for result in results.values())
 
 
 class RichFormatter(OutputFormatter):
@@ -210,7 +215,22 @@ class SarifFormatter(OutputFormatter):
     TOOL_NAME = "coderev"
     TOOL_VERSION = "0.3.2"
     
-    def format(self, result: ReviewResult) -> str:
+    def format(self, result: ReviewResult, file_path: str | None = None) -> str:
+        """Format one file's result; ``file_path`` locates issues that lack ``file``."""
+        return self._build_log([(file_path, result)])
+
+    def format_multiple(self, results: dict[str, ReviewResult]) -> str:
+        """Merge several files' results into a single SARIF log with one run."""
+        return self._build_log(list(results.items()))
+
+    def _build_log(self, entries: list[tuple[str | None, ReviewResult]]) -> str:
+        located = [
+            (issue, issue.file or path)
+            for path, result in entries
+            for issue in result.issues
+        ]
+        issues = [issue for issue, _ in located]
+
         sarif: dict[str, Any] = {
             "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
             "version": self.SARIF_VERSION,
@@ -221,16 +241,55 @@ class SarifFormatter(OutputFormatter):
                             "name": self.TOOL_NAME,
                             "version": self.TOOL_VERSION,
                             "informationUri": "https://github.com/khalil/coderev",
-                            "rules": self._generate_rules(result.issues),
+                            "rules": self._generate_rules(issues),
                         }
                     },
-                    "results": self._generate_results(result.issues),
+                    "invocations": [self._generate_invocation(entries)],
+                    "results": self._generate_results(located),
                 }
             ],
         }
-        
+
         return json.dumps(sarif, indent=2)
-    
+
+    @staticmethod
+    def _artifact_uri(path: str) -> str:
+        """Turn a file path into a SARIF artifact URI.
+
+        Backslashes become forward slashes. An absolute Windows path (``C:\\x``
+        or a UNC share) becomes a ``file:`` URI, since ``C:/x`` would parse as
+        a URI with scheme ``c``.
+        """
+        windows_path = PureWindowsPath(path)
+        if windows_path.drive and windows_path.is_absolute():
+            return windows_path.as_uri()
+        return path.replace("\\", "/")
+
+    def _physical_location(self, path: str, line: int | None = None, end_line: int | None = None) -> dict[str, Any]:
+        location: dict[str, Any] = {"artifactLocation": {"uri": self._artifact_uri(path)}}
+        if line:
+            location["region"] = {"startLine": line, "endLine": end_line or line}
+        return {"physicalLocation": location}
+
+    def _generate_invocation(self, entries: list[tuple[str | None, ReviewResult]]) -> dict[str, Any]:
+        """Report files whose review errored, so a partial run is not read as clean."""
+        notifications = []
+        for path, result in entries:
+            if not result.failed:
+                continue
+            notification: dict[str, Any] = {
+                "level": "error",
+                "message": {"text": f"Review failed: {result.error}"},
+            }
+            if path:
+                notification["locations"] = [self._physical_location(path)]
+            notifications.append(notification)
+
+        invocation: dict[str, Any] = {"executionSuccessful": not notifications}
+        if notifications:
+            invocation["toolExecutionNotifications"] = notifications
+        return invocation
+
     def _severity_to_level(self, severity: Severity) -> str:
         mapping = {
             Severity.CRITICAL: "error",
@@ -256,38 +315,28 @@ class SarifFormatter(OutputFormatter):
         
         return rules
     
-    def _generate_results(self, issues: list[Issue]) -> list[dict[str, Any]]:
+    def _generate_results(self, located: list[tuple[Issue, str | None]]) -> list[dict[str, Any]]:
         results = []
-        
-        for issue in issues:
+
+        for issue, path in located:
             result: dict[str, Any] = {
                 "ruleId": f"coderev/{issue.category.value}",
                 "level": self._severity_to_level(issue.severity),
                 "message": {"text": issue.message},
             }
-            
-            if issue.file and issue.line:
-                result["locations"] = [
-                    {
-                        "physicalLocation": {
-                            "artifactLocation": {"uri": issue.file},
-                            "region": {
-                                "startLine": issue.line,
-                                "endLine": issue.end_line or issue.line,
-                            },
-                        }
-                    }
-                ]
-            
+
+            if path:
+                result["locations"] = [self._physical_location(path, issue.line, issue.end_line)]
+
             if issue.suggestion:
                 result["fixes"] = [
                     {
                         "description": {"text": issue.suggestion},
                     }
                 ]
-            
+
             results.append(result)
-        
+
         return results
 
 
