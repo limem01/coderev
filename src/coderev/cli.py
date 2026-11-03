@@ -305,7 +305,8 @@ def review(
 
     try:
         config = Config.load()
-        errors = config.validate()
+        # --estimate never calls the API, so it must not demand an API key.
+        errors = config.validate(require_api_key=not estimate)
         if errors:
             for error in errors:
                 status.print(f"[red]Config error: {error}[/]")
@@ -415,7 +416,8 @@ def diff(
 
     try:
         config = Config.load()
-        errors = config.validate()
+        # --estimate never calls the API, so it must not demand an API key.
+        errors = config.validate(require_api_key=not estimate)
         if errors:
             for error in errors:
                 console.print(f"[red]Config error: {error}[/]")

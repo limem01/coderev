@@ -222,14 +222,20 @@ class Config:
             bitbucket=BitbucketConfig.from_dict(bitbucket_data),
         )
     
-    def validate(self) -> list[str]:
-        """Validate configuration and return list of errors."""
+    def validate(self, require_api_key: bool = True) -> list[str]:
+        """Validate configuration and return list of errors.
+
+        Args:
+            require_api_key: Report a missing API key for the active provider.
+                Pass ``False`` for offline operations such as cost estimation,
+                which never call the API; focus and provider are still checked.
+        """
         errors = []
         
         provider = self.get_provider()
         api_key = self.get_api_key_for_provider(provider)
         
-        if not api_key:
+        if require_api_key and not api_key:
             if provider == "openai":
                 errors.append(
                     "OpenAI API key not configured. "
