@@ -414,19 +414,21 @@ def diff(
 
     check_estimate_format(estimate, output_format)
 
+    status = status_console(output_format)
+
     try:
         config = Config.load()
         # --estimate never calls the API, so it must not demand an API key.
         errors = config.validate(require_api_key=not estimate)
         if errors:
             for error in errors:
-                console.print(f"[red]Config error: {error}[/]")
+                status.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
 
         diff_content = get_git_diff(ref, staged)
         
         if not diff_content.strip():
-            console.print("[yellow]No changes to review[/]")
+            status.print("[yellow]No changes to review[/]")
             return
         
         focus_list = list(focus) if focus else None
@@ -459,11 +461,11 @@ def diff(
                     sys.exit(1)
     
     except RateLimitError as e:
-        console.print(f"[red bold]Rate Limit Exceeded[/]")
-        console.print(f"[yellow]{e.message}[/]")
+        status.print(f"[red bold]Rate Limit Exceeded[/]")
+        status.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
+        status.print(f"[red]Error: {e}[/]")
         sys.exit(1)
 
 
@@ -482,12 +484,14 @@ def pr(
     from coderev.github import GitHubClient, detect_language_from_filename
     from coderev.prompts import build_pr_prompt
     
+    status = status_console(output_format)
+
     try:
         config = Config.load()
         errors = config.validate()
         if errors:
             for error in errors:
-                console.print(f"[red]Config error: {error}[/]")
+                status.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
         
         # Parse PR reference
@@ -514,13 +518,13 @@ def pr(
             owner, repo = match.groups()
             pr_number = int(pr_ref)
         
-        console.print(f"[bold blue]Fetching PR #{pr_number} from {owner}/{repo}...[/]")
+        status.print(f"[bold blue]Fetching PR #{pr_number} from {owner}/{repo}...[/]")
         
         with GitHubClient(config=config) as gh:
             pr_data = gh.get_pull_request(owner, repo, pr_number)
         
-        console.print(f"[bold]PR: {pr_data.title}[/]")
-        console.print(f"[dim]{pr_data.additions} additions, {pr_data.deletions} deletions across {len(pr_data.files)} files[/]")
+        status.print(f"[bold]PR: {pr_data.title}[/]")
+        status.print(f"[dim]{pr_data.additions} additions, {pr_data.deletions} deletions across {len(pr_data.files)} files[/]")
         
         # Prepare files for review
         files_for_review = []
@@ -533,7 +537,7 @@ def pr(
                 })
         
         if not files_for_review:
-            console.print("[yellow]No reviewable file changes found[/]")
+            status.print("[yellow]No reviewable file changes found[/]")
             return
         
         # Build prompt and review
@@ -547,7 +551,7 @@ def pr(
             focus_list,
         )
         
-        console.print("[dim]Analyzing changes...[/]")
+        status.print("[dim]Analyzing changes...[/]")
         response = reviewer._call_api(prompt)
         
         from coderev.reviewer import ReviewResult, Issue
@@ -579,7 +583,7 @@ def pr(
         
         # Post comments if requested
         if post_comments and result.issues:
-            console.print("\n[bold]Posting review to GitHub...[/]")
+            status.print("\n[bold]Posting review to GitHub...[/]")
             with GitHubClient(config=config) as gh:
                 event = {
                     "approve": "APPROVE",
@@ -593,14 +597,14 @@ def pr(
                     body=f"## AI Code Review\n\n{result.summary}\n\n**Score:** {result.score}/100",
                     event=event,
                 )
-                console.print("[green]Review posted successfully![/]")
+                status.print("[green]Review posted successfully![/]")
     
     except RateLimitError as e:
-        console.print(f"[red bold]Rate Limit Exceeded[/]")
-        console.print(f"[yellow]{e.message}[/]")
+        status.print(f"[red bold]Rate Limit Exceeded[/]")
+        status.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
+        status.print(f"[red]Error: {e}[/]")
         sys.exit(1)
 
 
@@ -627,12 +631,14 @@ def mr(
     from coderev.gitlab import GitLabClient, detect_language_from_filename
     from coderev.prompts import build_pr_prompt
     
+    status = status_console(output_format)
+
     try:
         config = Config.load()
         errors = config.validate()
         if errors:
             for error in errors:
-                console.print(f"[red]Config error: {error}[/]")
+                status.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
         
         # Parse MR reference
@@ -661,13 +667,13 @@ def mr(
             project_path = match.group(1)
             mr_iid = int(mr_ref)
         
-        console.print(f"[bold blue]Fetching MR !{mr_iid} from {project_path}...[/]")
+        status.print(f"[bold blue]Fetching MR !{mr_iid} from {project_path}...[/]")
         
         with GitLabClient(config=config) as gl:
             mr_data = gl.get_merge_request(project_path, mr_iid)
         
-        console.print(f"[bold]MR: {mr_data.title}[/]")
-        console.print(f"[dim]{mr_data.additions} additions, {mr_data.deletions} deletions across {len(mr_data.files)} files[/]")
+        status.print(f"[bold]MR: {mr_data.title}[/]")
+        status.print(f"[dim]{mr_data.additions} additions, {mr_data.deletions} deletions across {len(mr_data.files)} files[/]")
         
         # Prepare files for review
         files_for_review = []
@@ -681,7 +687,7 @@ def mr(
                 })
         
         if not files_for_review:
-            console.print("[yellow]No reviewable file changes found[/]")
+            status.print("[yellow]No reviewable file changes found[/]")
             return
         
         # Build prompt and review
@@ -695,7 +701,7 @@ def mr(
             focus_list,
         )
         
-        console.print("[dim]Analyzing changes...[/]")
+        status.print("[dim]Analyzing changes...[/]")
         response = reviewer._call_api(prompt)
         
         from coderev.reviewer import ReviewResult, Issue
@@ -727,7 +733,7 @@ def mr(
         
         # Post comments if requested
         if post_comments:
-            console.print("\n[bold]Posting review to GitLab...[/]")
+            status.print("\n[bold]Posting review to GitLab...[/]")
             with GitLabClient(config=config) as gl:
                 # Build review body
                 review_body = f"## AI Code Review\n\n{result.summary}\n\n**Score:** {result.score}/100"
@@ -747,14 +753,14 @@ def mr(
                     review_body += f"\n**Verdict:** {result.verdict.upper()}"
                 
                 gl.post_note(mr_data.project_id, mr_iid, review_body)
-                console.print("[green]Review posted successfully![/]")
+                status.print("[green]Review posted successfully![/]")
     
     except RateLimitError as e:
-        console.print(f"[red bold]Rate Limit Exceeded[/]")
-        console.print(f"[yellow]{e.message}[/]")
+        status.print(f"[red bold]Rate Limit Exceeded[/]")
+        status.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
+        status.print(f"[red]Error: {e}[/]")
         sys.exit(1)
 
 
@@ -782,12 +788,14 @@ def bpr(
     from coderev.bitbucket import BitbucketClient, detect_language_from_filename
     from coderev.prompts import build_pr_prompt
     
+    status = status_console(output_format)
+
     try:
         config = Config.load()
         errors = config.validate()
         if errors:
             for error in errors:
-                console.print(f"[red]Config error: {error}[/]")
+                status.print(f"[red]Config error: {error}[/]")
             sys.exit(1)
         
         # Parse PR reference
@@ -823,13 +831,13 @@ def bpr(
             workspace, repo_slug = match.groups()
             pr_id = int(pr_ref)
         
-        console.print(f"[bold blue]Fetching PR #{pr_id} from {workspace}/{repo_slug}...[/]")
+        status.print(f"[bold blue]Fetching PR #{pr_id} from {workspace}/{repo_slug}...[/]")
         
         with BitbucketClient(config=config) as bb:
             pr_data = bb.get_pull_request(workspace, repo_slug, pr_id)
         
-        console.print(f"[bold]PR: {pr_data.title}[/]")
-        console.print(f"[dim]{pr_data.additions} additions, {pr_data.deletions} deletions across {len(pr_data.files)} files[/]")
+        status.print(f"[bold]PR: {pr_data.title}[/]")
+        status.print(f"[dim]{pr_data.additions} additions, {pr_data.deletions} deletions across {len(pr_data.files)} files[/]")
         
         # Prepare files for review
         files_for_review = []
@@ -843,7 +851,7 @@ def bpr(
                 })
         
         if not files_for_review:
-            console.print("[yellow]No reviewable file changes found[/]")
+            status.print("[yellow]No reviewable file changes found[/]")
             return
         
         # Build prompt and review
@@ -857,7 +865,7 @@ def bpr(
             focus_list,
         )
         
-        console.print("[dim]Analyzing changes...[/]")
+        status.print("[dim]Analyzing changes...[/]")
         response = reviewer._call_api(prompt)
         
         from coderev.reviewer import ReviewResult, Issue
@@ -889,7 +897,7 @@ def bpr(
         
         # Post comments if requested
         if post_comments:
-            console.print("\n[bold]Posting review to Bitbucket...[/]")
+            status.print("\n[bold]Posting review to Bitbucket...[/]")
             with BitbucketClient(config=config) as bb:
                 # Build review body
                 review_body = f"## AI Code Review\n\n{result.summary}\n\n**Score:** {result.score}/100"
@@ -909,14 +917,14 @@ def bpr(
                     review_body += f"\n**Verdict:** {result.verdict.upper()}"
                 
                 bb.post_comment(workspace, repo_slug, pr_id, review_body)
-                console.print("[green]Review posted successfully![/]")
+                status.print("[green]Review posted successfully![/]")
     
     except RateLimitError as e:
-        console.print(f"[red bold]Rate Limit Exceeded[/]")
-        console.print(f"[yellow]{e.message}[/]")
+        status.print(f"[red bold]Rate Limit Exceeded[/]")
+        status.print(f"[yellow]{e.message}[/]")
         sys.exit(2)
     except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
+        status.print(f"[red]Error: {e}[/]")
         sys.exit(1)
 
 
