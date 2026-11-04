@@ -338,10 +338,12 @@ def review(
                     config=config,
                     max_concurrent=max_concurrent,
                 ) as reviewer:
-                    return await reviewer.review_files_async(files, focus=focus_list)
-            
+                    return await reviewer.review_files_async(
+                        files, focus=focus_list, stop_on_rate_limit=True
+                    )
+
             results = asyncio.run(run_parallel_review())
-            
+
             if output_format == "rich":
                 formatter = RichFormatter(console)
                 for file_path, result in results.items():
@@ -366,6 +368,10 @@ def review(
                         formatter.print_result(result, str(file_path))
                     except BinaryFileError as e:
                         console.print(f"[yellow]Skipped {file_path}: {e.message}[/]")
+                    except RateLimitError:
+                        # Stop here: the remaining files would hit the same limit.
+                        # The outer handler reports it and exits 2.
+                        raise
                     except Exception as e:
                         console.print(f"[red]Error reviewing {file_path}: {e}[/]")
                         # Record the failure so --fail-on can't pass a file nobody reviewed.
@@ -376,7 +382,9 @@ def review(
                         )
             else:
                 formatter = get_formatter(output_format)
-                results = reviewer.review_files([str(f) for f in files], focus=focus_list)
+                results = reviewer.review_files(
+                    [str(f) for f in files], focus=focus_list, stop_on_rate_limit=True
+                )
                 click.echo(formatter.format_multiple(results))
 
         # Check fail condition (without re-reviewing files)

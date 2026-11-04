@@ -181,7 +181,7 @@ def test_review_parallel_sarif_is_one_log(runner, tmp_path):
     instance = MagicMock()
     instance.__aenter__.return_value = instance
 
-    async def review_files_async(files, focus=None):
+    async def review_files_async(files, focus=None, stop_on_rate_limit=False):
         return _reviewed(files)
 
     instance.review_files_async = AsyncMock(side_effect=review_files_async)
@@ -200,8 +200,8 @@ def test_review_parallel_sarif_is_one_log(runner, tmp_path):
 
 def test_review_sequential_sarif_is_one_log(runner, tmp_path):
     with patch("coderev.cli.CodeReviewer") as reviewer_cls:
-        reviewer_cls.return_value.review_files.side_effect = lambda files, focus=None: _reviewed(
-            files
+        reviewer_cls.return_value.review_files.side_effect = (
+            lambda files, focus=None, stop_on_rate_limit=False: _reviewed(files)
         )
         with runner.isolated_filesystem(temp_dir=tmp_path):
             _write("a.py", "b.py")

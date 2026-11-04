@@ -267,8 +267,13 @@ class AsyncCodeReviewer:
         self,
         file_path: Path,
         focus: list[str] | None,
+        stop_on_rate_limit: bool = False,
     ) -> tuple[str, ReviewResult]:
-        """Review a file with error handling, returning (path, result) tuple."""
+        """Review a file with error handling, returning (path, result) tuple.
+
+        With ``stop_on_rate_limit`` a ``RateLimitError`` propagates instead of
+        being folded into an errored result.
+        """
         path_str = str(file_path)
         try:
             result = await self.review_file_async(file_path, focus)
@@ -280,6 +285,8 @@ class AsyncCodeReviewer:
                 score=-1,
             ))
         except Exception as e:
+            if stop_on_rate_limit and isinstance(e, RateLimitError):
+                raise
             return (path_str, ReviewResult(
                 summary=f"Error reviewing file: {e}",
                 issues=[],
@@ -291,28 +298,45 @@ class AsyncCodeReviewer:
         self,
         file_paths: list[Path | str],
         focus: list[str] | None = None,
+        stop_on_rate_limit: bool = False,
     ) -> dict[str, ReviewResult]:
         """Review multiple files in parallel.
-        
+
         Uses asyncio.gather to process files concurrently, bounded by
         max_concurrent to avoid overwhelming the API.
-        
+
         Args:
             file_paths: List of file paths to review.
             focus: Optional list of focus areas for the review.
-            
+            stop_on_rate_limit: On the first ``RateLimitError``, cancel every
+                review still running or waiting for a concurrency slot and
+                re-raise it, instead of recording it as an errored result.
+
         Returns:
             Dictionary mapping file paths to their review results.
+
+        Raises:
+            RateLimitError: Only when ``stop_on_rate_limit`` is set.
         """
         paths = [Path(p) for p in file_paths]
-        
+
         tasks = [
-            self._review_file_safe(path, focus)
+            asyncio.ensure_future(
+                self._review_file_safe(path, focus, stop_on_rate_limit=stop_on_rate_limit)
+            )
             for path in paths
         ]
-        
-        results_list = await asyncio.gather(*tasks)
-        
+
+        try:
+            results_list = await asyncio.gather(*tasks)
+        except RateLimitError:
+            # gather() does not cancel the siblings of a failed task, so queued
+            # reviews would keep calling a provider that is refusing requests.
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+
         return dict(results_list)
     
     async def review_diff_async(

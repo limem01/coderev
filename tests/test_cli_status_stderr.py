@@ -44,7 +44,7 @@ def async_reviewer():
     instance = MagicMock()
     instance.__aenter__.return_value = instance
 
-    async def review_files_async(files, focus=None):
+    async def review_files_async(files, focus=None, stop_on_rate_limit=False):
         return {str(f): _clean() for f in files}
 
     instance.review_files_async = AsyncMock(side_effect=review_files_async)

@@ -141,9 +141,9 @@ result = reviewer.review_file("src/main.py", focus=["security"])
 
 **Raises:** `FileNotFoundError`, `BinaryFileError`, `ValueError` (file too large), `UnicodeDecodeError`.
 
-##### `review_files(file_paths, focus=None, use_cache=True, rules=None) -> dict[str, ReviewResult]`
+##### `review_files(file_paths, focus=None, use_cache=True, rules=None, stop_on_rate_limit=False) -> dict[str, ReviewResult]`
 
-Review multiple files. Binary files are automatically skipped.
+Review multiple files. Binary files are automatically skipped. A file whose review fails gets a placeholder result with `error` set (`result.failed` is `True`). With `stop_on_rate_limit=True`, the first `RateLimitError` is raised instead and the remaining files are not sent.
 
 ```python
 results = reviewer.review_files(["main.py", "utils.py", "image.png"])
@@ -255,7 +255,7 @@ asyncio.run(main())
 |--------|-------------|
 | `review_code_async(code, language, focus, context)` | Review a code snippet asynchronously. |
 | `review_file_async(file_path, focus)` | Review a single file asynchronously. |
-| `review_files_async(file_paths, focus)` | Review multiple files in parallel. |
+| `review_files_async(file_paths, focus, stop_on_rate_limit=False)` | Review multiple files in parallel. With `stop_on_rate_limit=True`, the first `RateLimitError` cancels the reviews still queued and is raised. |
 | `review_diff_async(diff, focus)` | Review a git diff asynchronously. |
 
 #### Convenience Function

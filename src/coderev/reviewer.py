@@ -692,19 +692,27 @@ class CodeReviewer:
         focus: list[str] | None = None,
         use_cache: bool = True,
         rules: RuleSet | None = None,
+        stop_on_rate_limit: bool = False,
     ) -> dict[str, ReviewResult]:
         """Review multiple files and return results by file.
-        
+
         Binary files are automatically skipped with a descriptive message.
-        
+
         Args:
             file_paths: List of file paths to review.
             focus: List of focus areas for the review.
             use_cache: Whether to use cached results if available.
             rules: Optional rules to use (defaults to instance rules).
-            
+            stop_on_rate_limit: Re-raise the first ``RateLimitError`` instead of
+                recording it as an errored result and moving on. Once the
+                provider is rate limiting, the remaining files would most
+                likely hit the same limit.
+
         Returns:
             Dictionary mapping file paths to their review results.
+
+        Raises:
+            RateLimitError: Only when ``stop_on_rate_limit`` is set.
         """
         results = {}
         for path in file_paths:
@@ -718,6 +726,8 @@ class CodeReviewer:
                     score=-1,  # Indicates skipped, not reviewed
                 )
             except Exception as e:
+                if stop_on_rate_limit and isinstance(e, RateLimitError):
+                    raise
                 results[str(path)] = ReviewResult(
                     summary=f"Error reviewing file: {e}",
                     issues=[],
