@@ -18,7 +18,9 @@ from coderev.reviewer import (
     BinaryFileError,
     Issue,
     ReviewResult,
+    errored_result,
     is_binary_file,
+    unsent_after_rate_limit,
 )
 from coderev.cache import ReviewCache
 from coderev.rules import RuleSet, load_rules
@@ -287,18 +289,14 @@ class AsyncCodeReviewer:
         except Exception as e:
             if stop_on_rate_limit and isinstance(e, RateLimitError):
                 raise
-            return (path_str, ReviewResult(
-                summary=f"Error reviewing file: {e}",
-                issues=[],
-                score=0,
-                error=str(e),
-            ))
-    
+            return (path_str, errored_result(e))
+
     async def review_files_async(
         self,
         file_paths: list[Path | str],
         focus: list[str] | None = None,
         stop_on_rate_limit: bool = False,
+        skip_after_rate_limit: bool = False,
     ) -> dict[str, ReviewResult]:
         """Review multiple files in parallel.
 
@@ -311,18 +309,31 @@ class AsyncCodeReviewer:
             stop_on_rate_limit: On the first ``RateLimitError``, cancel every
                 review still running or waiting for a concurrency slot and
                 re-raise it, instead of recording it as an errored result.
+            skip_after_rate_limit: On the first ``RateLimitError``, cancel the
+                same reviews but return a result for every file: reviews that
+                finished keep their results, the rest are errored results with
+                ``rate_limited`` set.
 
         Returns:
             Dictionary mapping file paths to their review results.
 
         Raises:
             RateLimitError: Only when ``stop_on_rate_limit`` is set.
+            ValueError: If both ``stop_on_rate_limit`` and
+                ``skip_after_rate_limit`` are set.
         """
+        if stop_on_rate_limit and skip_after_rate_limit:
+            raise ValueError("stop_on_rate_limit and skip_after_rate_limit are exclusive")
+
         paths = [Path(p) for p in file_paths]
 
         tasks = [
             asyncio.ensure_future(
-                self._review_file_safe(path, focus, stop_on_rate_limit=stop_on_rate_limit)
+                self._review_file_safe(
+                    path,
+                    focus,
+                    stop_on_rate_limit=stop_on_rate_limit or skip_after_rate_limit,
+                )
             )
             for path in paths
         ]
@@ -334,8 +345,20 @@ class AsyncCodeReviewer:
             # reviews would keep calling a provider that is refusing requests.
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+            if stop_on_rate_limit:
+                raise
+            results: dict[str, ReviewResult] = {}
+            for path, outcome in zip(paths, outcomes):
+                if isinstance(outcome, RateLimitError):
+                    results[str(path)] = errored_result(outcome)
+                elif isinstance(outcome, asyncio.CancelledError):
+                    results[str(path)] = unsent_after_rate_limit()
+                elif isinstance(outcome, BaseException):
+                    raise outcome
+                else:
+                    results[outcome[0]] = outcome[1]
+            return results
 
         return dict(results_list)
     

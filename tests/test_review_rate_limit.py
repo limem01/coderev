@@ -8,8 +8,9 @@ rate-limited review printed "Error reviewing ..." and exited 0 (or 1 under
 already refusing requests. The pre-commit hook already stopped and exited 2.
 
 ``review_files`` / ``review_files_async`` keep their default (record the
-error, carry on) for library callers and ``coderev batch``; the review command
-opts in with ``stop_on_rate_limit=True``.
+error, carry on) for library callers; the review command opts in with
+``stop_on_rate_limit=True``. ``coderev batch`` uses ``skip_after_rate_limit``
+instead (see test_batch_rate_limit.py).
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ def _sync_reviewer(review_file) -> CodeReviewer:
 
 
 def test_review_files_records_rate_limit_by_default(tmp_path):
-    # Library callers (and `coderev batch`) keep the old contract.
+    # Library callers keep the old contract.
     a, b = _write(tmp_path, "a.py", "b.py")
 
     def review_file(path, *args, **kwargs):

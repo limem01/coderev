@@ -235,7 +235,10 @@ class ReviewResult:
     raw_response: dict[str, Any] = field(default_factory=dict)
     inline_suggestions: list[InlineSuggestion] = field(default_factory=list)
     error: str | None = None  # Set when the review failed (file was not reviewed)
-    
+    # Set (with ``error``) when the file went unreviewed because of a rate limit:
+    # its own request was refused, or it was never sent after an earlier one was.
+    rate_limited: bool = False
+
     @property
     def failed(self) -> bool:
         """True if the review errored out rather than completing."""
@@ -270,6 +273,34 @@ class ReviewResult:
     def suggestions_by_line(self) -> list[InlineSuggestion]:
         """Return inline suggestions sorted by line number."""
         return sorted(self.inline_suggestions, key=lambda s: s.start_line)
+
+
+def errored_result(error: Exception) -> ReviewResult:
+    """Placeholder for a file whose review raised ``error``."""
+    return ReviewResult(
+        summary=f"Error reviewing file: {error}",
+        issues=[],
+        score=0,
+        error=str(error),
+        rate_limited=isinstance(error, RateLimitError),
+    )
+
+
+UNSENT_AFTER_RATE_LIMIT = "Not reviewed: the provider rate limited an earlier review in this run"
+
+
+def unsent_after_rate_limit() -> ReviewResult:
+    """Placeholder for a file not reviewed because an earlier review was rate limited.
+
+    Its request was never sent, or was cancelled before it finished.
+    """
+    return ReviewResult(
+        summary=UNSENT_AFTER_RATE_LIMIT,
+        issues=[],
+        score=0,
+        error=UNSENT_AFTER_RATE_LIMIT,
+        rate_limited=True,
+    )
 
 
 class CodeReviewer:
@@ -693,6 +724,7 @@ class CodeReviewer:
         use_cache: bool = True,
         rules: RuleSet | None = None,
         stop_on_rate_limit: bool = False,
+        skip_after_rate_limit: bool = False,
     ) -> dict[str, ReviewResult]:
         """Review multiple files and return results by file.
 
@@ -707,16 +739,30 @@ class CodeReviewer:
                 recording it as an errored result and moving on. Once the
                 provider is rate limiting, the remaining files would most
                 likely hit the same limit.
+            skip_after_rate_limit: After the first ``RateLimitError``, stop
+                sending reviews but still return a result for every file: the
+                rate-limited file and every file after it are errored results
+                with ``rate_limited`` set. For callers that want a partial
+                report rather than an exception.
 
         Returns:
             Dictionary mapping file paths to their review results.
 
         Raises:
             RateLimitError: Only when ``stop_on_rate_limit`` is set.
+            ValueError: If both ``stop_on_rate_limit`` and
+                ``skip_after_rate_limit`` are set.
         """
+        if stop_on_rate_limit and skip_after_rate_limit:
+            raise ValueError("stop_on_rate_limit and skip_after_rate_limit are exclusive")
+
         results = {}
+        rate_limited = False
         for path in file_paths:
             path = Path(path)
+            if rate_limited:
+                results[str(path)] = unsent_after_rate_limit()
+                continue
             try:
                 results[str(path)] = self.review_file(path, focus, use_cache=use_cache, rules=rules)
             except BinaryFileError as e:
@@ -726,14 +772,11 @@ class CodeReviewer:
                     score=-1,  # Indicates skipped, not reviewed
                 )
             except Exception as e:
-                if stop_on_rate_limit and isinstance(e, RateLimitError):
-                    raise
-                results[str(path)] = ReviewResult(
-                    summary=f"Error reviewing file: {e}",
-                    issues=[],
-                    score=0,
-                    error=str(e),
-                )
+                if isinstance(e, RateLimitError):
+                    if stop_on_rate_limit:
+                        raise
+                    rate_limited = skip_after_rate_limit
+                results[str(path)] = errored_result(e)
         return results
     
     def clear_cache(self) -> int:

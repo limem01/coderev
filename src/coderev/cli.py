@@ -12,7 +12,13 @@ from rich.console import Console
 
 from coderev import __version__
 from coderev.config import Config
-from coderev.reviewer import BinaryFileError, CodeReviewer, RateLimitError, ReviewResult
+from coderev.reviewer import (
+    UNSENT_AFTER_RATE_LIMIT,
+    BinaryFileError,
+    CodeReviewer,
+    RateLimitError,
+    ReviewResult,
+)
 from coderev.output import RichFormatter, get_formatter
 
 if TYPE_CHECKING:
@@ -34,6 +40,30 @@ def status_console(output_format: str) -> Console:
     status lines go to stderr and ``coderev batch . --format json | jq`` parses.
     """
     return console if output_format == "rich" else err_console
+
+
+def exit_if_rate_limited(results: dict[str, ReviewResult], status: Console) -> None:
+    """Exit with status 2 and retry guidance if any file went unreviewed to a rate limit.
+
+    For callers that report partial results (``skip_after_rate_limit``) rather
+    than stopping at the ``RateLimitError`` itself.
+    """
+    unreviewed = [result for result in results.values() if result.rate_limited]
+    if not unreviewed:
+        return
+
+    status.print("[red bold]Rate Limit Exceeded[/]")
+    # The provider's own message(s) carry the retry-after hint; files that were
+    # never sent only carry the generic placeholder.
+    for message in dict.fromkeys(
+        result.error for result in unreviewed if result.error != UNSENT_AFTER_RATE_LIMIT
+    ):
+        status.print(f"[yellow]{message}[/]", highlight=False)
+    status.print(
+        f"[yellow]{len(unreviewed)} of {len(results)} file(s) were not reviewed. "
+        "Re-run once the limit resets.[/]"
+    )
+    sys.exit(2)
 
 
 def enforce_fail_on(results: dict[str, ReviewResult], fail_on: Optional[str]) -> None:
@@ -1148,13 +1178,17 @@ def batch(
                     config=config,
                     max_concurrent=max_concurrent,
                 ) as reviewer:
-                    return await reviewer.review_files_async(files, focus=focus_list)
-            
+                    return await reviewer.review_files_async(
+                        files, focus=focus_list, skip_after_rate_limit=True
+                    )
+
             results = asyncio.run(run_parallel_review())
         else:
             status.print("[dim]Reviewing files sequentially...[/]")
             reviewer = CodeReviewer(config=config)
-            results = reviewer.review_files([str(f) for f in files], focus=focus_list)
+            results = reviewer.review_files(
+                [str(f) for f in files], focus=focus_list, skip_after_rate_limit=True
+            )
         
         # Generate batch report
         report = BatchReviewReport.from_results(results)
@@ -1183,7 +1217,11 @@ def batch(
                 status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
-        
+
+        # A rate limit leaves the review incomplete: exit 2 (retry) rather than
+        # judge a partial set of files with the --fail-on gate.
+        exit_if_rate_limited(results, status)
+
         # Check fail condition
         enforce_fail_on(results, fail_on)
 

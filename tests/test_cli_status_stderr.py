@@ -44,7 +44,7 @@ def async_reviewer():
     instance = MagicMock()
     instance.__aenter__.return_value = instance
 
-    async def review_files_async(files, focus=None, stop_on_rate_limit=False):
+    async def review_files_async(files, focus=None, **kwargs):
         return {str(f): _clean() for f in files}
 
     instance.review_files_async = AsyncMock(side_effect=review_files_async)
@@ -55,7 +55,7 @@ def async_reviewer():
 @pytest.fixture
 def sync_reviewer():
     with patch("coderev.cli.CodeReviewer") as reviewer_cls:
-        reviewer_cls.return_value.review_files.side_effect = lambda files, focus=None: {
+        reviewer_cls.return_value.review_files.side_effect = lambda files, focus=None, **kwargs: {
             f: _clean() for f in files
         }
         yield reviewer_cls
