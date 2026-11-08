@@ -141,9 +141,9 @@ result = reviewer.review_file("src/main.py", focus=["security"])
 
 **Raises:** `FileNotFoundError`, `BinaryFileError`, `ValueError` (file too large), `UnicodeDecodeError`.
 
-##### `review_files(file_paths, focus=None, use_cache=True, rules=None, stop_on_rate_limit=False) -> dict[str, ReviewResult]`
+##### `review_files(file_paths, focus=None, use_cache=True, rules=None, stop_on_rate_limit=False, skip_after_rate_limit=False) -> dict[str, ReviewResult]`
 
-Review multiple files. Binary files are automatically skipped. A file whose review fails gets a placeholder result with `error` set (`result.failed` is `True`). With `stop_on_rate_limit=True`, the first `RateLimitError` is raised instead and the remaining files are not sent.
+Review multiple files. Binary files are automatically skipped. A file whose review fails gets a placeholder result with `error` set (`result.failed` is `True`). With `stop_on_rate_limit=True`, the first `RateLimitError` is raised instead and the remaining files are not sent. With `skip_after_rate_limit=True`, the remaining files are not sent either, but nothing is raised: the rate-limited file and every file after it get an errored result with `rate_limited=True`, so you can still report on the files that were reviewed. The two flags are exclusive (`ValueError` if both are set).
 
 ```python
 results = reviewer.review_files(["main.py", "utils.py", "image.png"])
@@ -255,7 +255,7 @@ asyncio.run(main())
 |--------|-------------|
 | `review_code_async(code, language, focus, context)` | Review a code snippet asynchronously. |
 | `review_file_async(file_path, focus)` | Review a single file asynchronously. |
-| `review_files_async(file_paths, focus, stop_on_rate_limit=False)` | Review multiple files in parallel. With `stop_on_rate_limit=True`, the first `RateLimitError` cancels the reviews still queued and is raised. |
+| `review_files_async(file_paths, focus, stop_on_rate_limit=False, skip_after_rate_limit=False)` | Review multiple files in parallel. With `stop_on_rate_limit=True`, the first `RateLimitError` cancels the reviews still queued and is raised. With `skip_after_rate_limit=True`, it cancels them the same way but returns every file: finished reviews keep their results, the rest are errored results with `rate_limited=True`. |
 | `review_diff_async(diff, focus)` | Review a git diff asynchronously. |
 
 #### Convenience Function
@@ -289,9 +289,12 @@ from coderev import ReviewResult
 | `verdict` | `str \| None` | PR verdict: `"approve"`, `"request_changes"`, or `"comment"`. |
 | `inline_suggestions` | `list[InlineSuggestion]` | Line-specific code suggestions. |
 | `raw_response` | `dict` | Raw API response for custom parsing. |
+| `error` | `str \| None` | Set when the file could not be reviewed (API error, rate limit). `None` for completed and skipped reviews. |
+| `rate_limited` | `bool` | `True` when the file went unreviewed because of a rate limit: its own request was refused, or it was not sent after an earlier one was. |
 
 | Property/Method | Returns | Description |
 |-----------------|---------|-------------|
+| `failed` | `bool` | `True` if the review errored (`error` is set). |
 | `critical_count` | `int` | Number of critical issues. |
 | `high_count` | `int` | Number of high-severity issues. |
 | `has_blocking_issues` | `bool` | `True` if any critical or high issues exist. |
