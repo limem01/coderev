@@ -1092,7 +1092,7 @@ language_hints = true
 # token = "ghp_xxx"
 '''
     
-    config_path.write_text(default_config)
+    config_path.write_text(default_config, encoding="utf-8")
     console.print(f"[green]Created {config_path}[/]")
     console.print("[dim]Edit the file to add your API keys and customize settings.[/]")
 
@@ -1199,21 +1199,21 @@ def batch(
         elif output_format == "json":
             output = json_module.dumps(report.to_dict(), indent=2)
             if output_file:
-                Path(output_file).write_text(output)
+                Path(output_file).write_text(output, encoding="utf-8")
                 status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
         elif output_format == "markdown":
             output = format_batch_report_markdown(report)
             if output_file:
-                Path(output_file).write_text(output)
+                Path(output_file).write_text(output, encoding="utf-8")
                 status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
         elif output_format == "html":
             output = format_batch_report_html(report)
             if output_file:
-                Path(output_file).write_text(output)
+                Path(output_file).write_text(output, encoding="utf-8")
                 status.print(f"[green]Report saved to {output_file}[/]")
             else:
                 click.echo(output)
